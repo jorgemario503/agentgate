@@ -1,0 +1,30 @@
+# Runtime data — never commit
+agent-sessions/
+fw_sessions/
+fw_history/
+local_sessions/
+ollama_history/
+mlx_history/
+agentdb-workspace/
+
+# Secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
