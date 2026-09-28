@@ -1,0 +1,37 @@
+default_policy: deny
+
+human_zone_prefixes:
+  - "skills/"
+  - "config/human/"
+  - "prompts/locked/"
+
+# Shared scope for every bot identity in this deployment.
+#
+# agent_id lookup is an exact match — a named Telegram identity
+# (--bot <name>) requires its own entry here, e.g.:
+#   telegram_assistant_<name>: *bot_scope
+# Without an entry the agent_id gets every memory write denied by
+# default_policy with no warning except a runtime PermissionDenied error.
+.bot_scope: &bot_scope
+  can_write:
+    - "memory/working/"
+    - "memory/episodic/"
+    - "memory/org/"
+    - "config/agent/learned_prefs/"
+    - "proposal/"
+  cannot_write:
+    - "config/human/"
+    - "skills/"
+  can_read:
+    - "memory/working/"
+    - "memory/episodic/"
+    - "memory/long_term/"
+    - "memory/org/"
+
+agents:
+  slack_assistant: *bot_scope
+  telegram_assistant: *bot_scope
+  whatsapp_assistant: *bot_scope
+  # Add named Telegram identities below, one entry per --bot <name>:
+  # telegram_assistant_personal: *bot_scope
+  # telegram_assistant_work: *bot_scope
