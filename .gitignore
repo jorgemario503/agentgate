@@ -1,0 +1,10 @@
+.env
+.venv/
+agent-sessions/
+agentdb-workspace/database/
+agentdb-workspace/conversations/
+agentdb-workspace/embeddings/
+agentdb-workspace/reconciliation/
+agentdb-workspace/logs/
+__pycache__/
+*.pyc
