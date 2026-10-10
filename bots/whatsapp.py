@@ -246,14 +246,14 @@ async def lifespan(app: FastAPI):
             agentdb_permissions = Path(config.AGENTDB_PERMISSIONS_PATH)
             if agentdb_permissions.exists():
                 db = AgentDB(
-                    path=config.AGENTDB_PATH,
                     memory_dir=config.AGENTDB_MEMORY_DIR,
                     permissions_path=agentdb_permissions,
                     tracking_directories=["agent-sessions"],
                     tracking_root=".",
                 )
                 _runner.init_agentdb(db, platform=WHATSAPP_PLATFORM)
-                print("[startup] AgentDB initialized (agent_id=whatsapp_assistant)")
+                db.lifecycle.run_sweep()
+                print(f"[startup] AgentDB initialized at {config.AGENTDB_MEMORY_DIR} (agent_id=whatsapp_assistant)")
             else:
                 print(f"[startup] AgentDB permissions file not found at {config.AGENTDB_PERMISSIONS_PATH} — skipping")
         except ImportError:

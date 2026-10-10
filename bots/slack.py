@@ -318,14 +318,14 @@ async def main(backend: str = "claude", model: str | None = None):
                     f"Set AGENTDB_PERMISSIONS_PATH or create the file."
                 )
             db = AgentDB(
-                path=config.AGENTDB_PATH,
                 memory_dir=config.AGENTDB_MEMORY_DIR,
                 permissions_path=agentdb_permissions,
                 tracking_directories=["agent-sessions"],
                 tracking_root=".",
             )
             runner.init_agentdb(db, platform=platform)
-            print(f"[startup] AgentDB initialized at {config.AGENTDB_PATH} (agent_id=slack_assistant)")
+            db.lifecycle.run_sweep()
+            print(f"[startup] AgentDB initialized at {config.AGENTDB_MEMORY_DIR} (agent_id=slack_assistant)")
         except ImportError:
             print("[startup] AgentDB not installed — skipping (AGENTDB_ENABLED=true but package missing)")
 

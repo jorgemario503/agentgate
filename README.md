@@ -269,6 +269,58 @@ agentgate/
 
 ---
 
+## MLX server as a launchd service (macOS)
+
+To run `mlx_lm.server` automatically at login, save the following to
+`~/Library/LaunchAgents/com.agentgate.mlx-server.plist`, then:
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.agentgate.mlx-server.plist
+```
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.agentgate.mlx-server</string>
+    <key>ProgramArguments</key>
+    <array>
+        <!-- absolute path to python in the venv where mlx-lm is installed -->
+        <string>/path/to/venv/bin/python</string>
+        <string>-m</string>
+        <string>mlx_lm.server</string>
+        <!-- same machine: 127.0.0.1 | cross-machine: 0.0.0.0 -->
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>8082</string>
+        <string>--model</string>
+        <string>mlx-community/Qwen3-14B-4bit</string>
+        <!-- omit --api-key for local-only use; required for cross-machine -->
+        <string>--api-key</string>
+        <string>YOUR_SECRET_KEY</string>
+    </array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>StandardOutPath</key><string>/tmp/mlx-server.log</string>
+    <key>StandardErrorPath</key><string>/tmp/mlx-server.log</string>
+</dict>
+</plist>
+```
+
+Generate a secret key: `openssl rand -hex 32`
+
+For cross-machine access, change `--host 127.0.0.1` → `--host 0.0.0.0` and
+use [Tailscale](https://tailscale.com/) so only your own devices can reach
+the port. See `.env.example` for the matching `MLX_BASE_URL` / `MLX_API_KEY`
+values.
+
+---
+
 ## License
 
-MIT
+AGPL-3.0. Any modification — including running this as a hosted network
+service — must be released under the same terms. See [LICENSE](LICENSE).

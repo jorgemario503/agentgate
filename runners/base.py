@@ -59,6 +59,67 @@ def check_blocked(text: str, patterns: list[str]) -> str | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Approval-flow formatters — shared by every runner's permission callback.
+# ---------------------------------------------------------------------------
+
+def _describe_ask_user_question(input_data: dict) -> str:
+    """Render an AskUserQuestion call as platform-neutral text."""
+    questions = input_data.get("questions", [])
+    blocks = []
+    for q in questions:
+        header = q.get("header", "").strip()
+        lines = [f"*{header}*" if header else "*Question*", q.get("question", "").strip()]
+        for i, opt in enumerate(q.get("options", []), start=1):
+            label = opt.get("label", "")
+            desc = opt.get("description", "")
+            lines.append(f"{i}. *{label}* — {desc}" if desc else f"{i}. *{label}*")
+        blocks.append("\n".join(lines))
+    text = "\n\n".join(blocks)
+    if len(questions) > 1:
+        text += (
+            "\n\n_Reply with one number per question, in order, separated by "
+            'commas (e.g. "1, 2") to pick by number — or answer in plain text._'
+        )
+    return text
+
+
+def _resolve_ask_user_answer(input_data: dict, answer: str) -> str:
+    """Map a numeric reply back to its option label(s); pass through free text."""
+    questions = input_data.get("questions", [])
+    stripped = answer.strip()
+    if not questions:
+        return stripped
+    tokens = [t for t in re.split(r"[,;\s]+", stripped) if t]
+    if len(tokens) != len(questions) or not all(t.isdigit() for t in tokens):
+        return stripped
+    labels = []
+    for q, token in zip(questions, tokens):
+        options = q.get("options", [])
+        idx = int(token) - 1
+        if not (0 <= idx < len(options)):
+            return stripped
+        labels.append(options[idx].get("label", token))
+    if len(questions) == 1:
+        return labels[0]
+    return "; ".join(
+        f"{(q.get('header') or q.get('question') or f'Q{i + 1}').strip()}: {label}"
+        for i, (q, label) in enumerate(zip(questions, labels))
+    )
+
+
+def _describe_tool_call(tool_name: str, input_data: dict) -> str:
+    """Human-readable description of what the agent wants to do."""
+    if tool_name == "Bash":
+        cmd = input_data.get("command", "")
+        return f"Run command:\n```{cmd[:800]}```"
+    if tool_name == "AskUserQuestion":
+        return _describe_ask_user_question(input_data)
+    import json
+    pretty = json.dumps(input_data, indent=2, default=str)
+    return f"Use tool `{tool_name}`:\n```{pretty[:800]}```"
+
+
 @runtime_checkable
 class Runner(Protocol):
     """

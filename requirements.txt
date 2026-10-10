@@ -20,3 +20,6 @@ claude-agent-sdk>=0.1.0
 
 # Fireworks runner (optional — only needed for --fireworks)
 # pip install "fireworks-ai>=1.2.0"
+
+# AgentDB governed memory (optional — only needed when AGENTDB_ENABLED=true)
+# pip install "agentdb>=0.1.0"
