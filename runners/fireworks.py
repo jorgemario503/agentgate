@@ -482,6 +482,7 @@ class FireworksAgentClient:
         session_store: Optional[SessionStore] = None,
         max_tool_iterations: int = 25,
         context_window: int = DEFAULT_CONTEXT_WINDOW,
+        on_compact: Optional[Callable[[str], None]] = None,
     ):
         self.model = model
         self.context_window = context_window
@@ -501,6 +502,7 @@ class FireworksAgentClient:
         self.max_tool_iterations = max_tool_iterations
         self.messages: list[dict] = []
         self._ephemeral_context: Optional[str] = None
+        self.on_compact = on_compact
 
     async def connect(self) -> None:
         self.messages = self.session_store.load(self.session_id)
@@ -621,6 +623,11 @@ class FireworksAgentClient:
         )
         self.session_store.save(self.session_id, self.messages)
         print(f"[fireworks] compacted {n_compacted} oldest turn(s) in session {self.session_id}")
+        if self.on_compact is not None:
+            try:
+                self.on_compact(summary)
+            except Exception as e:
+                print(f"[agentdb] on_compact callback error: {e}")
 
     async def _call_fireworks(self) -> dict:
         await self._maybe_compact_history()
@@ -906,6 +913,7 @@ class FireworksRunner:
         self._current_tasks: dict[str, asyncio.Task] = {}
         self._interrupt_requested: set[str] = set()
         self._agentdb_middleware = None
+        self._agentdb = None
         self._agent_id: str = "agent"
 
     async def set_model(self, value: str | None) -> ModelSpec:
@@ -941,6 +949,7 @@ class FireworksRunner:
         if not _cfg.AGENTDB_ENABLED or not _AGENTDB_AVAILABLE:
             return
         self._agent_id = platform.agent_id
+        self._agentdb = db
         self._agentdb_middleware = AgentDBClaudeMiddleware(
             db=db,
             agent_id=platform.agent_id,
@@ -1010,6 +1019,20 @@ class FireworksRunner:
         history_store = JsonFileSessionStore(directory=f"{store.base}/fw_history")
         system_prompt = f"{_BASE_SYSTEM_PROMPT}\n\n{SYSTEM_PROMPT}"
 
+        on_compact = None
+        if self._agentdb is not None:
+            db = self._agentdb
+            agent_id = self._agent_id
+
+            def on_compact(summary: str) -> None:
+                try:
+                    db.checkpoint(agent_id=agent_id, session_id=thread_id)
+                    db.write_compaction_summary(
+                        agent_id=agent_id, session_id=thread_id, summary=summary
+                    )
+                except Exception as e:
+                    print(f"[agentdb] compaction persist error: {e}")
+
         client = FireworksAgentClient(
             model=self._model.model_id,
             context_window=self._model.context_window,
@@ -1020,6 +1043,7 @@ class FireworksRunner:
             ),
             session_id=thread_id,
             session_store=history_store,
+            on_compact=on_compact,
         )
         await client.connect()
         self._clients[thread_id] = client

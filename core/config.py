@@ -94,7 +94,14 @@ MLX_SUMMARY_MODEL = os.environ.get("MLX_SUMMARY_MODEL", "")
 # AGENTDB (optional — disabled by default)
 # -------------------------
 AGENTDB_ENABLED = os.environ.get("AGENTDB_ENABLED", "false").lower() in ("true", "1", "yes")
-AGENTDB_PATH = os.environ.get("AGENTDB_PATH", "agent-sessions/agentdb.db")
+# AGENTDB_MEMORY_DIR is the workspace root. The SQLite DB lives at
+#   <AGENTDB_MEMORY_DIR>/database/agentdb.sqlite
+# and the config file at:
+#   <AGENTDB_MEMORY_DIR>/config/memory.yaml
+# To enable semantic retrieval, add to memory.yaml:
+#   embeddings:
+#     enabled: true
+#   (requires: pip install 'agentdatabase[local-embed]')
 AGENTDB_MEMORY_DIR = os.environ.get("AGENTDB_MEMORY_DIR", "agentdb-workspace")
 AGENTDB_PERMISSIONS_PATH = os.environ.get("AGENTDB_PERMISSIONS_PATH", "permissions.yaml")
 
