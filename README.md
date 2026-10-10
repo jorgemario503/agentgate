@@ -193,24 +193,49 @@ Admins can approve/reject AgentDB skill proposals and toggle auto-approval.
 
 ## AgentDB (optional governed memory)
 
-AgentDB is disabled by default (`AGENTDB_ENABLED=false`). When enabled, the agent has persistent cross-session memory governed by `permissions.yaml`.
+AgentDB is disabled by default. When enabled, the agent has persistent cross-session memory governed by a `permissions.yaml` file.
 
-To enable:
+**1. Install the package**
+
+```bash
+pip install agentdatabase
+# optional: semantic search and conflict detection
+pip install 'agentdatabase[local-embed]'
 ```
+
+**2. Create `permissions.yaml`**
+
+This file governs what the agent can read and write in memory. A minimal starting point:
+
+```yaml
+agent_id: slack_assistant   # must match the bot's agent_id (see bots/*.py)
+allowed_read_scopes: ["*"]
+allowed_write_scopes: ["*"]
+```
+
+See the [agentdatabase docs](https://github.com/newtonx/agentdb) for the full permissions schema and scope configuration.
+
+**3. Set env vars**
+
+```bash
 # .env
 AGENTDB_ENABLED=true
-AGENTDB_PATH=./agentdb.db
-AGENTDB_MEMORY_DIR=./agentdb-workspace
-AGENTDB_PERMISSIONS_PATH=./permissions.yaml
+AGENTDB_MEMORY_DIR=agentdb-workspace      # DB and config live here
+AGENTDB_PERMISSIONS_PATH=permissions.yaml
 ```
 
-Edit `permissions.yaml` to control which memory paths each agent identity can read and write. Any agent_id not listed there gets every write denied by the `default_policy: deny` rule.
+On startup the bot prints `AgentDB initialized at agentdb-workspace`. If the package is missing or `permissions.yaml` doesn't exist, it logs a warning and continues without memory.
 
-When adding a named Telegram identity, add a matching entry:
+**Embeddings (optional)**
+
+To enable semantic retrieval, edit `<AGENTDB_MEMORY_DIR>/config/memory.yaml` (created on first run):
+
 ```yaml
-agents:
-  telegram_assistant_personal: *bot_scope
+embeddings:
+  enabled: true
 ```
+
+Requires `pip install 'agentdatabase[local-embed]'`. See the agentdatabase package for model configuration and further options.
 
 ---
 
