@@ -435,7 +435,7 @@ class LocalAgentClient:
         self._http = httpx.AsyncClient(
             base_url=base_url,
             headers=headers,
-            timeout=httpx.Timeout(120.0),
+            timeout=httpx.Timeout(600.0),
         )
         self.tools = tools or {}
         self.system_prompt = system_prompt
@@ -638,9 +638,13 @@ class LocalAgentClient:
                 yield ResultMessage(session_id=self.session_id, is_error=True,
                                     result=f"{msg} from {self.name} server: {body}")
                 return
-            except (httpx.ConnectError, httpx.TimeoutException) as e:
+            except httpx.ConnectError as e:
                 yield ResultMessage(session_id=self.session_id, is_error=True,
-                                    result=f"Could not reach {self.name} server: {e}")
+                                    result=f"Could not reach {self.name} server (connection refused): {e}")
+                return
+            except httpx.TimeoutException as e:
+                yield ResultMessage(session_id=self.session_id, is_error=True,
+                                    result=f"Timed out waiting for {self.name} server ({type(e).__name__}): {e}")
                 return
             except Exception as e:
                 yield ResultMessage(session_id=self.session_id, is_error=True,
