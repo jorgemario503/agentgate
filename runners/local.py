@@ -435,7 +435,7 @@ class LocalAgentClient:
         self._http = httpx.AsyncClient(
             base_url=base_url,
             headers=headers,
-            timeout=httpx.Timeout(120.0),
+            timeout=httpx.Timeout(600.0),
         )
         self.tools = tools or {}
         self.system_prompt = system_prompt
@@ -638,9 +638,13 @@ class LocalAgentClient:
                 yield ResultMessage(session_id=self.session_id, is_error=True,
                                     result=f"{msg} from {self.name} server: {body}")
                 return
-            except (httpx.ConnectError, httpx.TimeoutException) as e:
+            except httpx.ConnectError as e:
                 yield ResultMessage(session_id=self.session_id, is_error=True,
-                                    result=f"Could not reach {self.name} server: {e}")
+                                    result=f"Could not reach {self.name} server (connection refused): {e}")
+                return
+            except httpx.TimeoutException as e:
+                yield ResultMessage(session_id=self.session_id, is_error=True,
+                                    result=f"Timed out waiting for {self.name} server ({type(e).__name__}): {e}")
                 return
             except Exception as e:
                 yield ResultMessage(session_id=self.session_id, is_error=True,
@@ -965,6 +969,28 @@ class LocalRunner:
         history_store = JsonFileSessionStore(directory=f"{store.base}/{self.name}_history")
         system_prompt = f"{_BASE_SYSTEM_PROMPT}\n\n{SYSTEM_PROMPT}"
 
+        # Local models can't call agentdb tools mid-turn, so pre-load a memory
+        # snapshot into the system prompt at session start.
+        if self._agentdb_middleware is not None:
+            try:
+                init_messages, _ = await self._agentdb_middleware.prepare_turn_async(
+                    user_query="",
+                    session_id=thread_id,
+                    working_dirs=[workspace_path] + list(ADDITIONAL_DIRS),
+                )
+                init_parts = [
+                    m["content"] for m in init_messages
+                    if m.get("role") in ("system", "user") and m.get("content", "").strip()
+                ]
+                if init_parts:
+                    system_prompt = (
+                        f"{system_prompt}\n\n"
+                        f"## Memory from previous sessions\n"
+                        + "\n\n".join(init_parts)
+                    )
+            except Exception as e:
+                print(f"[agentdb] session-start memory load error: {e}")
+
         on_compact = None
         if self._agentdb is not None:
             db = self._agentdb
@@ -1041,7 +1067,10 @@ class LocalRunner:
                     parts = [m["content"] for m in messages if m.get("role") in ("system", "user")]
                     memory_parts = [p for p in parts if p != prompt]
                     if memory_parts:
-                        memory_context = "\n\n".join(memory_parts)
+                        memory_context = (
+                            "## Relevant memory for this turn\n"
+                            + "\n\n".join(memory_parts)
+                        )
 
                 await client.query(prompt, ephemeral_context=memory_context)
 

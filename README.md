@@ -84,7 +84,8 @@ python run.py --slack --telegram
 
 # With a non-default backend
 python run.py --telegram fireworks
-python run.py --telegram ollama -- --model qwen3:14b
+python run.py --telegram ollama
+python run.py --telegram ollama surfer qwen3:14b
 
 # See all configured Telegram identities
 python run.py --list-bots
