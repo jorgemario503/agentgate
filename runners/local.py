@@ -70,6 +70,16 @@ _SUMMARY_SYSTEM_PROMPT = (
     "Write plain prose, no headings."
 )
 
+import re as _re
+
+
+def _extract_files(text: str) -> list[str]:
+    return _re.findall(r'(?:[\w./\-]+/[\w.\-]+\.\w{1,6}|/[\w./\-]+\.\w{1,6})', text)
+
+
+def _extract_dirs(text: str) -> list[str]:
+    return _re.findall(r'/(?:[\w./\-]+/)+', text)
+
 
 def _estimate_tokens(obj: Any) -> int:
     return max(1, int(len(json.dumps(obj)) / TOKEN_CHAR_RATIO))
@@ -857,6 +867,8 @@ class LocalRunner:
         self._agentdb_middleware = None
         self._agentdb = None
         self._agent_id: str = "agent"
+        self._turn_counters: dict[str, int] = {}
+        self._session_workspace_paths: dict[str, str] = {}
 
     @classmethod
     def from_env(cls, name: str) -> "LocalRunner":
@@ -885,13 +897,17 @@ class LocalRunner:
 
     def init_agentdb(self, db, platform: PlatformConfig) -> None:
         import core.config as _cfg
-        if not _cfg.AGENTDB_ENABLED or not _AGENTDB_AVAILABLE:
+        if not _cfg.AGENTDB_ENABLED:
+            return
+        try:
+            from agentdb.adapters.middleware import AgentDBMiddleware
+            from agentdb.adapters.capabilities import LOCAL_CAPABILITIES
+        except ImportError:
             return
         self._agent_id = platform.agent_id
         self._agentdb = db
-        self._agentdb_middleware = AgentDBClaudeMiddleware(
-            db=db,
-            agent_id=platform.agent_id,
+        self._agentdb_middleware = AgentDBMiddleware(
+            db=db, agent_id=platform.agent_id, capabilities=LOCAL_CAPABILITIES
         )
 
     def list_pending_conflicts(self) -> list:
@@ -936,6 +952,16 @@ class LocalRunner:
                 await client.disconnect()
             except Exception:
                 pass
+        if self._agentdb_middleware is not None:
+            ws_path = self._session_workspace_paths.pop(thread_id, None)
+            if ws_path:
+                jsonl_path = str(Path(ws_path) / "session_summary.jsonl")
+                try:
+                    import asyncio as _asyncio
+                    _asyncio.create_task(self._agentdb_middleware.end_session(thread_id, jsonl_path))
+                except Exception as e:
+                    print(f"[agentdb] end_session error: {e}")
+        self._turn_counters.pop(thread_id, None)
         self._locks.pop(thread_id, None)
 
     async def close_all(self) -> None:
@@ -1027,6 +1053,7 @@ class LocalRunner:
         )
         await client.connect()
         self._clients[thread_id] = client
+        self._session_workspace_paths[thread_id] = workspace_path
         return client
 
     async def run_prompt(
@@ -1085,6 +1112,19 @@ class LocalRunner:
                             raise RuntimeError(message.result or f"{self.name} agent error")
 
                 response_text = "\n".join(text_parts).strip()
+                if self._agentdb_middleware is not None:
+                    dirs = _extract_dirs(response_text)
+                    files = _extract_files(response_text)
+                    self._agentdb_middleware.report_directories(thread_id, dirs)
+                    turn_num = self._turn_counters.get(thread_id, 0)
+                    self._agentdb_middleware.record_turn_context(
+                        session_id=thread_id,
+                        turn_num=turn_num,
+                        files_read=files,
+                        files_written=[],
+                        key_fact=(response_text[:120].split(".")[0] if response_text else ""),
+                    )
+                    self._turn_counters[thread_id] = turn_num + 1
                 await _record_outcome(response_text, "task_complete", 1.0)
                 return response_text, resume_session_id
 

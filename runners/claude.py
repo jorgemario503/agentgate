@@ -149,12 +149,16 @@ class ClaudeRunner:
 
     def init_agentdb(self, db, platform: PlatformConfig) -> None:
         import core.config as _cfg
-        if not _cfg.AGENTDB_ENABLED or not _AGENTDB_AVAILABLE:
+        if not _cfg.AGENTDB_ENABLED:
+            return
+        try:
+            from agentdb.adapters.middleware import AgentDBMiddleware
+            from agentdb.adapters.capabilities import CLAUDE_CAPABILITIES
+        except ImportError:
             return
         self._agent_id = platform.agent_id
-        self._agentdb_middleware = AgentDBClaudeMiddleware(
-            db=db,
-            agent_id=platform.agent_id,
+        self._agentdb_middleware = AgentDBMiddleware(
+            db=db, agent_id=platform.agent_id, capabilities=CLAUDE_CAPABILITIES
         )
 
     def list_pending_conflicts(self) -> list:
