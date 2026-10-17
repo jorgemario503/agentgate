@@ -42,15 +42,6 @@ from runners.base import (
     _describe_ask_user_question, _resolve_ask_user_answer, _describe_tool_call,
 )
 
-try:
-    if AGENTDB_ENABLED:
-        from agentdb.adapters.claude_agent_sdk import AgentDBClaudeMiddleware
-        _AGENTDB_AVAILABLE = True
-    else:
-        _AGENTDB_AVAILABLE = False
-except ImportError:
-    _AGENTDB_AVAILABLE = False
-
 
 # ---------------------------------------------------------------------------
 # Model resolution
