@@ -14,6 +14,8 @@ import re
 import signal
 from pathlib import Path
 
+import httpx
+
 try:
     from claude_agent_sdk._internal.transport.subprocess_cli import _kill_active_children as _sdk_kill_children
 except Exception as e:
@@ -158,6 +160,36 @@ async def _run_and_reply(runner, platform, thread_id, channel, prompt, workspace
 
 
 # ---------------------------------------------------------------------------
+# File download helper
+# ---------------------------------------------------------------------------
+
+async def _download_slack_files(files: list[dict], workspace_path: str) -> list[str]:
+    """Download image and PDF attachments from a Slack message to the session
+    workspace. Returns the list of saved filenames; unsupported types are skipped."""
+    token = os.environ.get("SLACK_BOT_TOKEN", "")
+    saved: list[str] = []
+    async with httpx.AsyncClient(timeout=30) as client:
+        for f in files:
+            mime = f.get("mimetype", "")
+            if not (mime.startswith("image/") or mime == "application/pdf"):
+                continue
+            url = f.get("url_private_download") or f.get("url_private")
+            if not url:
+                continue
+            name = f.get("name") or f"slack_file_{f.get('id', 'unknown')}"
+            local_path = os.path.join(workspace_path, name)
+            try:
+                r = await client.get(url, headers={"Authorization": f"Bearer {token}"}, follow_redirects=True)
+                r.raise_for_status()
+                with open(local_path, "wb") as fh:
+                    fh.write(r.content)
+                saved.append(name)
+            except Exception as e:
+                print(f"[slack] Failed to download file {name}: {e}")
+    return saved
+
+
+# ---------------------------------------------------------------------------
 # @mention handler
 # ---------------------------------------------------------------------------
 
@@ -238,6 +270,18 @@ def _register_handlers(platform: PlatformConfig):
             )
             await _post(channel, thread_id, reply)
             return
+
+        # File attachments — download images/PDFs to workspace (Claude backend only)
+        from runners.claude import ClaudeRunner
+        slack_files = event.get("files", [])
+        if slack_files and isinstance(runner, ClaudeRunner):
+            meta_for_ws = store.get_session_meta(thread_id)
+            ws_path = (meta_for_ws["workspace_path"] if meta_for_ws
+                       else store.ensure_workspace(thread_id))
+            saved_files = await _download_slack_files(slack_files, ws_path)
+            if saved_files:
+                note = "\n".join(f"[file saved to workspace: {f}]" for f in saved_files)
+                clean_text = f"{clean_text}\n\n{note}" if clean_text else note
 
         blocked = check_blocked(clean_text, config.BLOCKED_PATTERNS)
         if blocked:
