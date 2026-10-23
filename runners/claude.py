@@ -39,15 +39,6 @@ from runners.base import (
     _describe_ask_user_question, _resolve_ask_user_answer, _describe_tool_call,
 )
 
-try:
-    if AGENTDB_ENABLED:
-        from agentdb.adapters.claude_agent_sdk import AgentDBClaudeMiddleware
-        _AGENTDB_AVAILABLE = True
-    else:
-        _AGENTDB_AVAILABLE = False
-except ImportError:
-    _AGENTDB_AVAILABLE = False
-
 _MAX_ENRICHED_CHARS = 50_000
 _SUMMARY_MODEL = "claude-haiku-4-5-20251001"
 _SUMMARY_CHUNK_CHARS = 150_000
@@ -149,12 +140,16 @@ class ClaudeRunner:
 
     def init_agentdb(self, db, platform: PlatformConfig) -> None:
         import core.config as _cfg
-        if not _cfg.AGENTDB_ENABLED or not _AGENTDB_AVAILABLE:
+        if not _cfg.AGENTDB_ENABLED:
+            return
+        try:
+            from agentdb.adapters.middleware import AgentDBMiddleware
+            from agentdb.adapters.capabilities import CLAUDE_CAPABILITIES
+        except ImportError:
             return
         self._agent_id = platform.agent_id
-        self._agentdb_middleware = AgentDBClaudeMiddleware(
-            db=db,
-            agent_id=platform.agent_id,
+        self._agentdb_middleware = AgentDBMiddleware(
+            db=db, agent_id=platform.agent_id, capabilities=CLAUDE_CAPABILITIES
         )
 
     def list_pending_conflicts(self) -> list:

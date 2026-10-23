@@ -197,6 +197,49 @@ async def _run_and_reply(runner, chat_id, context, prompt, workspace_path, resum
 # Handlers
 # ---------------------------------------------------------------------------
 
+async def _dispatch(runner, chat_id, thread_id, context, prompt, message_id):
+    """Resolve/create the session and run the prompt. Auth + pending-approval
+    checks must be done by the caller before invoking this."""
+    blocked = check_blocked(prompt, config.BLOCKED_PATTERNS)
+    if blocked:
+        await _post(context, chat_id, f"🚫 Blocked. Your message matches a forbidden pattern: `{blocked}`")
+        return
+
+    meta = telegram_store.get_session_meta(thread_id)
+    if meta and not meta.get("expired"):
+        telegram_store.touch_session(thread_id)
+        await _run_and_reply(
+            runner, chat_id, context, prompt,
+            workspace_path=meta["workspace_path"],
+            resume_session_id=meta.get("session_id"),
+            message_id=message_id,
+        )
+        return
+
+    prior_session_id = meta.get("session_id") if meta else None
+    start_msg = "🔄 Resuming session" if prior_session_id else "🚀 Starting agent session"
+    await _post(
+        context, chat_id,
+        f"{start_msg}...\n"
+        f"When the agent needs permission (e.g. git commit/push), you'll be asked "
+        f"`yes` / `no` right here.",
+    )
+
+    workspace_path = telegram_store.ensure_workspace(thread_id)
+    telegram_store.register_session(thread_id, str(chat_id), workspace_path)
+    meta = telegram_store.get_session_meta(thread_id)
+    await _run_and_reply(
+        runner, chat_id, context, prompt, workspace_path=workspace_path,
+        resume_session_id=meta.get("session_id"), message_id=message_id,
+    )
+
+    await _post(
+        context, chat_id,
+        "✅ Session active. Message me in this chat to continue.\n"
+        "Commands: `/stop` · `/status`",
+    )
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.effective_message
     text = (message.text or "").strip()
@@ -223,47 +266,62 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _post(context, chat_id, reminder)
         return
 
-    blocked = check_blocked(text, config.BLOCKED_PATTERNS)
-    if blocked:
-        await _post(context, chat_id, f"🚫 Blocked. Your message matches a forbidden pattern: `{blocked}`")
-        return
-
-    # Retrieve runner from commands module (bound via use_runner at startup)
     runner = commands._require_runner()
+    await _dispatch(runner, chat_id, thread_id, context, text, message_id)
 
-    meta = telegram_store.get_session_meta(thread_id)
-    if meta and not meta.get("expired"):
-        telegram_store.touch_session(thread_id)
-        await _run_and_reply(
-            runner, chat_id, context, text,
-            workspace_path=meta["workspace_path"],
-            resume_session_id=meta.get("session_id"),
-            message_id=message_id,
-        )
+
+async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle photo and PDF/image document messages. Files are saved to the
+    session workspace so Claude can read them. Only supported with ClaudeRunner."""
+    from runners.claude import ClaudeRunner
+
+    message = update.effective_message
+    chat_id = update.effective_chat.id
+    thread_id = str(chat_id)
+    user_id = str(update.effective_user.id) if update.effective_user else None
+    message_id = str(message.message_id)
+    caption = (message.caption or "").strip()
+
+    if not commands.is_allowed(TELEGRAM_PLATFORM, user_id):
+        await _post(context, chat_id, "🚫 You are not authorized to use this bot.")
         return
 
-    prior_session_id = meta.get("session_id") if meta else None
-    start_msg = "🔄 Resuming session" if prior_session_id else "🚀 Starting agent session"
-    await _post(
-        context, chat_id,
-        f"{start_msg}...\n"
-        f"When the agent needs permission (e.g. git commit/push), you'll be asked "
-        f"`yes` / `no` right here.",
-    )
+    if approvals.has_pending(thread_id):
+        reminder = (
+            "⚠️ A question is pending. Reply with your answer first."
+            if approvals.pending_kind(thread_id) == "answer"
+            else "⚠️ A permission request is pending. Reply `yes` or `no` first."
+        )
+        await _post(context, chat_id, reminder)
+        return
+
+    runner = commands._require_runner()
+    if not isinstance(runner, ClaudeRunner):
+        await _post(context, chat_id, "⚠️ Image and PDF support is only available with the Claude backend.")
+        return
 
     workspace_path = telegram_store.ensure_workspace(thread_id)
-    telegram_store.register_session(thread_id, str(chat_id), workspace_path)
-    meta = telegram_store.get_session_meta(thread_id)
-    await _run_and_reply(
-        runner, chat_id, context, text, workspace_path=workspace_path,
-        resume_session_id=meta.get("session_id"), message_id=message_id,
-    )
 
-    await _post(
-        context, chat_id,
-        "✅ Session active. Message me in this chat to continue.\n"
-        "Commands: `/stop` · `/status`",
-    )
+    if message.photo:
+        tg_file = await context.bot.get_file(message.photo[-1].file_id)
+        filename = f"image_{message_id}.jpg"
+        label = "image"
+    elif message.document:
+        tg_file = await context.bot.get_file(message.document.file_id)
+        orig = message.document.file_name or f"file_{message_id}"
+        ext = Path(orig).suffix.lower() or (
+            ".pdf" if (message.document.mime_type or "").endswith("pdf") else ".bin"
+        )
+        filename = f"file_{message_id}{ext}"
+        label = "PDF" if ext == ".pdf" else "image"
+    else:
+        return
+
+    local_path = os.path.join(workspace_path, filename)
+    await tg_file.download_to_drive(local_path)
+
+    prompt = f"{caption}\n\n[{label} saved to workspace: {filename}]" if caption else f"[{label} saved to workspace: {filename}]"
+    await _dispatch(runner, chat_id, thread_id, context, prompt, message_id)
 
 
 async def _command_allowed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -420,6 +478,12 @@ async def main(backend: str = "claude", model: str | None = None, bot_name: str 
     application.add_handler(CommandHandler("autoapprove", cmd_autoapprove, filters=filters.ChatType.PRIVATE))
     application.add_handler(
         MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, handle_message)
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.ChatType.PRIVATE & (filters.PHOTO | filters.Document.IMAGE | filters.Document.PDF) & ~filters.COMMAND,
+            handle_media,
+        )
     )
 
     async def notify(channel, thread_id, text):
