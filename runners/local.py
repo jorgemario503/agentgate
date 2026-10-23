@@ -948,8 +948,7 @@ class LocalRunner:
             if ws_path:
                 jsonl_path = str(Path(ws_path) / "session_summary.jsonl")
                 try:
-                    import asyncio as _asyncio
-                    _asyncio.create_task(self._agentdb_middleware.end_session(thread_id, jsonl_path))
+                    await self._agentdb_middleware.end_session(thread_id, jsonl_path)
                 except Exception as e:
                     print(f"[agentdb] end_session error: {e}")
         self._turn_counters.pop(thread_id, None)
@@ -986,11 +985,13 @@ class LocalRunner:
         history_store = JsonFileSessionStore(directory=f"{store.base}/{self.name}_history")
         system_prompt = f"{_BASE_SYSTEM_PROMPT}\n\n{SYSTEM_PROMPT}"
 
-        # Local models can't call agentdb tools mid-turn, so pre-load a memory
-        # snapshot into the system prompt at session start.
+        # Local models can't call agentdb tools mid-turn, so pre-load memory
+        # records from previous sessions into the system prompt at session start.
+        # Use prepare_turn (not async) to get only memory records — skills,
+        # workspace, and work context are injected fresh each turn via ephemeral_context.
         if self._agentdb_middleware is not None:
             try:
-                init_messages, _ = await self._agentdb_middleware.prepare_turn_async(
+                init_messages, _ = self._agentdb_middleware.prepare_turn(
                     user_query="",
                     session_id=thread_id,
                     working_dirs=[workspace_path] + list(ADDITIONAL_DIRS),
