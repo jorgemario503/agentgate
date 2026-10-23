@@ -1019,6 +1019,28 @@ class FireworksRunner:
         history_store = JsonFileSessionStore(directory=f"{store.base}/fw_history")
         system_prompt = f"{_BASE_SYSTEM_PROMPT}\n\n{SYSTEM_PROMPT}"
 
+        # Local models can't call agentdb tools mid-turn, so pre-load a memory
+        # snapshot into the system prompt at session start.
+        if self._agentdb_middleware is not None:
+            try:
+                init_messages, _ = await self._agentdb_middleware.prepare_turn_async(
+                    user_query="",
+                    session_id=thread_id,
+                    working_dirs=[workspace_path] + list(ADDITIONAL_DIRS),
+                )
+                init_parts = [
+                    m["content"] for m in init_messages
+                    if m.get("role") in ("system", "user") and m.get("content", "").strip()
+                ]
+                if init_parts:
+                    system_prompt = (
+                        f"{system_prompt}\n\n"
+                        f"## Memory from previous sessions\n"
+                        + "\n\n".join(init_parts)
+                    )
+            except Exception as e:
+                print(f"[agentdb] session-start memory load error: {e}")
+
         on_compact = None
         if self._agentdb is not None:
             db = self._agentdb
@@ -1087,7 +1109,10 @@ class FireworksRunner:
                     parts = [m["content"] for m in messages if m.get("role") in ("system", "user")]
                     memory_parts = [p for p in parts if p != prompt]
                     if memory_parts:
-                        memory_context = "\n\n".join(memory_parts)
+                        memory_context = (
+                            "## Relevant memory for this turn\n"
+                            + "\n\n".join(memory_parts)
+                        )
 
                 await client.query(prompt, ephemeral_context=memory_context)
 
