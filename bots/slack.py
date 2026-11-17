@@ -58,6 +58,20 @@ def make_platform() -> tuple[PlatformConfig, SessionStore]:
 # ---------------------------------------------------------------------------
 
 async def select_runner(backend: str, model: str | None = None):
+    if backend in ("ollama", "mlx", "local"):
+        from runners.local import LocalRunner
+        runner = LocalRunner.from_env(backend)
+        active = runner.set_model(model)
+        print(f"[{backend}] active model: {active}")
+        return runner
+
+    if backend == "deepinfra":
+        from runners.deepinfra import DeepInfraRunner
+        runner = DeepInfraRunner.from_env(model=model)
+        active = await runner.set_model(model)
+        print(f"[deepinfra] active model: {active.model_id}")
+        return runner
+
     if backend == "fireworks":
         try:
             from runners.fireworks import FireworksRunner
@@ -70,13 +84,6 @@ async def select_runner(backend: str, model: str | None = None):
         runner = FireworksRunner()
         active = await runner.set_model(model)
         print(f"[fireworks] active model: {active}")
-        return runner
-
-    if backend in ("ollama", "mlx", "local"):
-        from runners.local import LocalRunner
-        runner = LocalRunner.from_env(backend)
-        active = runner.set_model(model)
-        print(f"[{backend}] active model: {active}")
         return runner
 
     from runners.claude import ClaudeRunner
@@ -428,6 +435,8 @@ if __name__ == "__main__":
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--claude", dest="backend", action="store_const", const="claude",
                        help="Use the Claude Agent SDK backend (default).")
+    group.add_argument("--deepinfra", dest="backend", action="store_const", const="deepinfra",
+                       help="Use the Fireworks backend.")
     group.add_argument("--fireworks", dest="backend", action="store_const", const="fireworks",
                        help="Use the Fireworks backend.")
     group.add_argument("--ollama", dest="backend", action="store_const", const="ollama",
@@ -435,7 +444,7 @@ if __name__ == "__main__":
     group.add_argument("--mlx", dest="backend", action="store_const", const="mlx",
                        help="Use a local MLX server.")
     parser.add_argument("--model", dest="model", default=None,
-                        help="Model name override (for --fireworks/--ollama/--mlx).")
+                        help="Model name override (for --deepinfra/--fireworks/--ollama/--mlx).")
     parser.set_defaults(backend="claude")
     args = parser.parse_args()
     asyncio.run(main(args.backend, args.model))

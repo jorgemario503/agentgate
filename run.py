@@ -6,6 +6,7 @@ no restart-on-crash, no daemonization.
 Usage:
     python run.py --slack
     python run.py --telegram
+    python run.py --telegram deepinfra
     python run.py --telegram fireworks personal gpt-oss-20b
     python run.py --slack --telegram claude work
     python run.py --whatsapp
@@ -28,7 +29,7 @@ from pathlib import Path
 import yaml
 
 CHANNELS_NO_ARGS = ("slack", "whatsapp")
-VALID_RUNNERS = ("claude", "fireworks", "ollama", "mlx")
+VALID_RUNNERS = ("claude", "deepinfra", "fireworks", "ollama", "mlx")
 
 
 @dataclass(frozen=True)
@@ -246,11 +247,12 @@ def main() -> int:
     if not specs:
         print(
             "usage: run.py --slack | --telegram [runner bot_id model] | --whatsapp | --list-bots\n"
-            "       runner: claude (default) | fireworks | ollama | mlx\n"
+            "       runner: claude (default) | deepinfra | fireworks | ollama | mlx\n"
             "\n"
             "examples:\n"
             "  python run.py --slack\n"
             "  python run.py --telegram\n"
+            "  python run.py --telegram deepinfra\n"
             "  python run.py --telegram fireworks personal\n"
             "  python run.py --slack --telegram claude work\n"
             "  python run.py --list-bots",
