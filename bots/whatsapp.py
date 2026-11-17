@@ -71,6 +71,20 @@ _runner = None  # set in lifespan
 # ---------------------------------------------------------------------------
 
 async def select_runner(backend: str, model: str | None = None):
+    if backend in ("ollama", "mlx", "local"):
+        from runners.local import LocalRunner
+        runner = LocalRunner.from_env(backend)
+        active = runner.set_model(model)
+        print(f"[{backend}] active model: {active}")
+        return runner
+
+    if backend == "deepinfra":
+        from runners.deepinfra import DeepInfraRunner
+        runner = DeepInfraRunner.from_env(model=model)
+        active = await runner.set_model(model)
+        print(f"[deepinfra] active model: {active.model_id}")
+        return runner
+
     if backend == "fireworks":
         try:
             from runners.fireworks import FireworksRunner
@@ -83,13 +97,6 @@ async def select_runner(backend: str, model: str | None = None):
         runner = FireworksRunner()
         active = await runner.set_model(model)
         print(f"[fireworks] active model: {active}")
-        return runner
-
-    if backend in ("ollama", "mlx", "local"):
-        from runners.local import LocalRunner
-        runner = LocalRunner.from_env(backend)
-        active = runner.set_model(model)
-        print(f"[{backend}] active model: {active}")
         return runner
 
     from runners.claude import ClaudeRunner
@@ -307,6 +314,7 @@ if __name__ == "__main__":
     )
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--claude", dest="backend", action="store_const", const="claude")
+    group.add_argument("--deepinfra", dest="backend", action="store_const", const="deepinfra")
     group.add_argument("--fireworks", dest="backend", action="store_const", const="fireworks")
     group.add_argument("--ollama", dest="backend", action="store_const", const="ollama")
     group.add_argument("--mlx", dest="backend", action="store_const", const="mlx")
