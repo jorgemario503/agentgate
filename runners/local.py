@@ -35,6 +35,7 @@ from core.config import (
     SDK_ALLOWED_TOOLS,
     SYSTEM_PROMPT,
 )
+from core.agentdb import AgentDBSurface
 from core.providers import settings_for
 from core.reasoning import (
     build_request_kwargs,
@@ -918,6 +919,7 @@ class LocalRunner:
         self._interrupt_requested: set[str] = set()
         self._agentdb_middleware = None
         self._agentdb = None
+        self._agentdb_api = AgentDBSurface()
         self._agent_id: str = "agent"
         self._turn_counters: dict[str, int] = {}
         self._session_workspace_paths: dict[str, str] = {}
@@ -961,33 +963,23 @@ class LocalRunner:
         self._agentdb_middleware = AgentDBMiddleware(
             db=db, agent_id=platform.agent_id, capabilities=LOCAL_CAPABILITIES
         )
+        self._agentdb_api.bind(self._agentdb_middleware, platform.agent_id)
 
+    # --- AgentDB shared surfaces (see core/agentdb.py) -------------------
     def list_pending_conflicts(self) -> list:
-        if self._agentdb_middleware is None:
-            raise RuntimeError("AgentDB not initialized — call init_agentdb first")
-        return self._agentdb_middleware.pending_conflicts()
+        return self._agentdb_api.list_pending_conflicts()
 
     def list_pending_proposals(self, status: str = "pending") -> list[dict]:
-        if self._agentdb_middleware is None:
-            raise RuntimeError("AgentDB not initialized — call init_agentdb first")
-        return self._agentdb_middleware.list_proposals(status=status)
+        return self._agentdb_api.list_pending_proposals(status=status)
 
     def propose_skill(self, name: str, content: str) -> str:
-        if self._agentdb_middleware is None:
-            raise RuntimeError("AgentDB not initialized — call init_agentdb first")
-        return self._agentdb_middleware.propose_skill(
-            name=name, content=content, scope=[self._agent_id]
-        )
+        return self._agentdb_api.propose_skill(name=name, content=content)
 
     def approve_skill_proposal(self, proposal_id: str) -> None:
-        if self._agentdb_middleware is None:
-            raise RuntimeError("AgentDB not initialized — call init_agentdb first")
-        self._agentdb_middleware.approve_proposal(proposal_id)
+        self._agentdb_api.approve_proposal(proposal_id)
 
     def reject_skill_proposal(self, proposal_id: str, reason=None) -> None:
-        if self._agentdb_middleware is None:
-            raise RuntimeError("AgentDB not initialized — call init_agentdb first")
-        self._agentdb_middleware.reject_proposal(proposal_id, reason=reason)
+        self._agentdb_api.reject_proposal(proposal_id, reason=reason)
 
     async def cancel(self, thread_id: str) -> bool:
         task = self._current_tasks.get(thread_id)

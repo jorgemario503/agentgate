@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import MagicMock
 from agentdb.adapters.capabilities import (
-    LOCAL_CAPABILITIES, FIREWORKS_CAPABILITIES, CLAUDE_CAPABILITIES
+    LOCAL_CAPABILITIES, SERVERLESS_CAPABILITIES, CLAUDE_CAPABILITIES
 )
 from agentdb.adapters.middleware import AgentDBMiddleware
 
@@ -47,13 +47,13 @@ def test_local_runner_init_agentdb_uses_local_capabilities(monkeypatch):
     assert runner._agentdb_middleware._capabilities is LOCAL_CAPABILITIES
 
 
-def test_fireworks_runner_init_agentdb_uses_fireworks_capabilities(monkeypatch):
+def test_fireworks_runner_init_agentdb_uses_serverless_capabilities(monkeypatch):
     monkeypatch.setattr("core.config.AGENTDB_ENABLED", True)
     from runners.fireworks import FireworksRunner
     runner = FireworksRunner()
     runner.init_agentdb(db=_make_mock_db(), platform=make_platform())
     assert isinstance(runner._agentdb_middleware, AgentDBMiddleware)
-    assert runner._agentdb_middleware._capabilities is FIREWORKS_CAPABILITIES
+    assert runner._agentdb_middleware._capabilities is SERVERLESS_CAPABILITIES
 
 
 def test_claude_runner_init_agentdb_uses_claude_capabilities(monkeypatch):

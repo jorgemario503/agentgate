@@ -251,20 +251,22 @@ async def lifespan(app: FastAPI):
         try:
             from agentdb import AgentDB
             agentdb_permissions = Path(config.AGENTDB_PERMISSIONS_PATH)
-            if agentdb_permissions.exists():
-                db = AgentDB(
-                    memory_dir=config.AGENTDB_MEMORY_DIR,
-                    permissions_path=agentdb_permissions,
-                    tracking_directories=["agent-sessions"],
-                    tracking_root=".",
+            if not agentdb_permissions.exists():
+                raise FileNotFoundError(
+                    f"AgentDB permissions file not found: {agentdb_permissions}. "
+                    f"Set AGENTDB_PERMISSIONS_PATH or create the file."
                 )
-                _runner.init_agentdb(db, platform=WHATSAPP_PLATFORM)
-                db.lifecycle.run_sweep()
-                print(f"[startup] AgentDB initialized at {config.AGENTDB_MEMORY_DIR} (agent_id=whatsapp_assistant)")
-            else:
-                print(f"[startup] AgentDB permissions file not found at {config.AGENTDB_PERMISSIONS_PATH} — skipping")
+            db = AgentDB(
+                memory_dir=config.AGENTDB_MEMORY_DIR,
+                permissions_path=agentdb_permissions,
+                tracking_directories=["agent-sessions"],
+                tracking_root=".",
+            )
+            _runner.init_agentdb(db, platform=WHATSAPP_PLATFORM)
+            db.lifecycle.run_sweep()
+            print(f"[startup] AgentDB initialized at {config.AGENTDB_MEMORY_DIR} (agent_id=whatsapp_assistant)")
         except ImportError:
-            print("[startup] AgentDB not installed — skipping")
+            print("[startup] AgentDB not installed — skipping (AGENTDB_ENABLED=true but package missing)")
 
     _http = httpx.AsyncClient()
     os.makedirs(_whatsapp_store.base, exist_ok=True)

@@ -13,6 +13,7 @@ import json
 import os
 import time
 import uuid
+from pathlib import Path
 
 from runners.claude_reasoning import (
     build_claude_options,
@@ -162,6 +163,8 @@ class ClaudeRunner:
         self._agentdb_middleware = None
         self._agent_id: str = "agent"
         self._interrupt_requested: set[str] = set()
+        # Needed so close_client can hand AgentDB a session-summary path.
+        self._session_workspace_paths: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Runner protocol
@@ -231,6 +234,15 @@ class ClaudeRunner:
                 await client.disconnect()
             except Exception:
                 pass
+        if self._agentdb_middleware is not None:
+            ws_path = self._session_workspace_paths.pop(thread_id, None)
+            if ws_path:
+                jsonl_path = str(Path(ws_path) / "session_summary.jsonl")
+                try:
+                    await self._agentdb_middleware.end_session(thread_id, jsonl_path)
+                except Exception as e:
+                    print(f"[agentdb] end_session error: {e}")
+        self._session_workspace_paths.pop(thread_id, None)
         self._locks.pop(thread_id, None)
 
     async def close_all(self) -> None:
@@ -411,6 +423,7 @@ class ClaudeRunner:
         async with self._lock_for(thread_id):
             try:
                 try:
+                    self._session_workspace_paths[thread_id] = workspace_path
                     client = await self._get_or_create_client(
                         thread_id, workspace_path, resume_session_id, post_fn, platform
                     )
