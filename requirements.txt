@@ -25,4 +25,5 @@ openai>=1.0.0,<3.0.0
 # pip install "fireworks-ai>=1.2.0"
 
 # AgentDB governed memory (optional — only needed when AGENTDB_ENABLED=true)
-# pip install "agentdb>=0.1.0"
+# Distribution name is `agentdatabase`; the import name remains `agentdb`.
+# pip install "agentdatabase>=0.1.0"

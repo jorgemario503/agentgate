@@ -22,6 +22,7 @@ Each bot runs as a private-chat conversation with a long-lived agent session. Th
 |---|---|---|
 | Claude (default) | `--claude` | `claude` CLI logged in |
 | Fireworks | `--fireworks` | `pip install fireworks-ai` + `FIREWORKS_API_KEY` |
+| DeepInfra | `--deepinfra` | `DEEPINFRA_API_KEY` + `DEEPINFRA_MODEL` (`openai` is in requirements) |
 | Ollama | `--ollama` | Ollama server running, `OLLAMA_MODEL` |
 | MLX | `--mlx` | mlx-lm server running, `MLX_MODEL` |
 
