@@ -176,3 +176,146 @@ async def autoapprove_reply(
         return "🔒 Auto-approval disabled for this session."
     state = "on" if approvals.is_auto_approved(thread_id) else "off"
     return f"Usage: autoapprove on|off (currently {state})"
+
+
+# ---------------------------------------------------------------------------
+# Reasoning mode
+# ---------------------------------------------------------------------------
+
+REASONING_USAGE = "Usage: reasoning off|low|medium|high|show"
+
+# Per-thread reasoning state (level + observed verification). Never persisted.
+_reasoning_states: dict[str, "object"] = {}
+
+
+def reasoning_state_for(thread_id: str):
+    """Return (creating if needed) the runtime reasoning state for a thread."""
+    from core.reasoning.registry import ReasoningRuntimeState
+
+    state = _reasoning_states.get(thread_id)
+    if state is None:
+        state = ReasoningRuntimeState()
+        _reasoning_states[thread_id] = state
+    return state
+
+
+def reset_reasoning_state(thread_id: str) -> None:
+    _reasoning_states.pop(thread_id, None)
+
+
+def reasoning_reply(
+    thread_id: str,
+    raw_args: str,
+    *,
+    backend: str,
+    model_id: str,
+    state,
+    session_store=None,
+) -> str:
+    """Handle `/reasoning <level|show>`.
+
+    `backend` is the runner name ("claude", "deepinfra", "fireworks", "ollama",
+    "mlx"). `state` is the per-thread ReasoningRuntimeState owned by the runner.
+    """
+    from core.reasoning import REASONING_LEVELS, resolve
+    from core.reasoning.registry import lookup
+
+    arg = raw_args.strip().lower()
+
+    if not arg or arg == "status":
+        return _reasoning_status(backend, model_id, state)
+
+    if arg == "show":
+        if state.last_reasoning:
+            return f"🧠 Last reasoning trace:\n\n{state.last_reasoning}"
+        if state.level == "off":
+            return "Reasoning is off — nothing to show."
+        return f"No reasoning content captured yet. {state.detail or ''}".strip()
+
+    if arg not in REASONING_LEVELS:
+        return REASONING_USAGE
+
+    if backend == "claude":
+        state.level = arg
+        state.state = "unknown" if arg != "off" else "unknown"
+        state.detail = ""
+        if session_store is not None:
+            session_store.append_audit_log(
+                thread_id, "reasoning_level", {"level": arg, "backend": backend, "model": model_id}
+            )
+        if arg == "off":
+            return "🔒 Reasoning disabled."
+        return (
+            f"🧠 Reasoning set to `{arg}` (Claude adaptive thinking).\n"
+            "Verification appears after the next reply."
+        )
+
+    resolution = resolve(backend, model_id)
+    state.level = arg
+    state.detail = ""
+
+    if arg == "off":
+        state.state = "unknown"
+        if session_store is not None:
+            session_store.append_audit_log(
+                thread_id, "reasoning_level", {"level": "off", "backend": backend, "model": model_id}
+            )
+        return "🔒 Reasoning disabled."
+
+    if resolution.style == "unsupported":
+        state.state = "rejected"
+        return f"❌ Model `{model_id}` does not support reasoning controls."
+
+    if not resolution.in_registry:
+        # Unknown model: honour the user's explicit choice, but be honest that
+        # we cannot verify support up front.
+        state.state = "unverified"
+        state.detail = (
+            "⚠️ Reasoning mode not verified — model not in the registry. "
+            "Requested anyway; if the provider rejects or ignores it you will be told."
+        )
+        if session_store is not None:
+            session_store.append_audit_log(
+                thread_id, "reasoning_level",
+                {"level": arg, "backend": backend, "model": model_id, "registry": "miss"},
+            )
+        return (
+            f"{state.detail}\n"
+            f"Requested level: `{arg}` for `{model_id}`."
+        )
+
+    state.state = "unknown"
+    if session_store is not None:
+        session_store.append_audit_log(
+            thread_id, "reasoning_level", {"level": arg, "backend": backend, "model": model_id}
+        )
+    return (
+        f"🧠 Reasoning set to `{arg}` for `{model_id}` "
+        f"({resolution.style}). Verification appears after the next reply."
+    )
+
+
+def _reasoning_status(backend: str, model_id: str, state) -> str:
+    from core.reasoning import resolve
+
+    if backend == "claude":
+        support = "adaptive thinking (effort)"
+        in_registry = "n/a"
+    else:
+        resolution = resolve(backend, model_id)
+        support = resolution.style
+        in_registry = "yes" if resolution.in_registry else "no"
+
+    lines = [
+        f"🧠 Reasoning: `{state.level}`",
+        f"Backend: {backend} · model: `{model_id}`",
+        f"Support: {support} · in registry: {in_registry}",
+        f"State: {state.state}",
+    ]
+    if state.detail:
+        lines.append(state.detail)
+    if state.level == "off":
+        lines.append("Enable with: reasoning low|medium|high")
+    lines.append("Show the last trace with: reasoning show")
+    return "\n".join(lines)
+

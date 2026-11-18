@@ -14,6 +14,11 @@ import os
 import time
 import uuid
 
+from runners.claude_reasoning import (
+    build_claude_options,
+    extract_thinking_text,
+    record_claude_outcome,
+)
 from claude_agent_sdk import (
     ClaudeAgentOptions,
     ClaudeSDKClient,
@@ -47,6 +52,33 @@ DIRECTORY_TOOL_NAMES = [
     "mcp__directory_tools__lookup_directory",
     "mcp__directory_tools__remember_directory",
 ]
+
+
+def _log_claude_reasoning(thread_id: str, thinking_parts: list[str]) -> None:
+    """Record whether Claude actually returned thinking text for this turn."""
+    import core.commands as _commands
+
+    state = _commands.reasoning_state_for(thread_id)
+    if state.level == "off":
+        return
+    joined = "\n\n".join(thinking_parts).strip()
+    detail = record_claude_outcome(state, joined)
+    if detail:
+        print(f"[reasoning] {thread_id}: {state.state}")
+
+
+def _claude_reasoning_options(thread_id: str) -> dict:
+    """ClaudeAgentOptions fields for the thread's current reasoning level."""
+    import core.commands as _commands
+
+    state = _commands.reasoning_state_for(thread_id)
+    config = build_claude_options(state.level, adaptive=True)
+    out: dict = {}
+    if config.thinking is not None:
+        out["thinking"] = config.thinking
+    if config.effort is not None:
+        out["effort"] = config.effort
+    return out
 
 
 async def _haiku_summarize(prompt: str) -> str:
@@ -346,6 +378,7 @@ class ClaudeRunner:
             setting_sources=["project"],
             add_dirs=ADDITIONAL_DIRS,
             resume=resume,
+            **_claude_reasoning_options(thread_id),
         )
         client = ClaudeSDKClient(options=options)
         await client.connect()
@@ -416,11 +449,15 @@ class ClaudeRunner:
                     session_id = resume_session_id
                     _prompt_too_long = False
 
+                    thinking_parts: list[str] = []
                     async for message in client.receive_response():
                         if isinstance(message, AssistantMessage):
                             for block in message.content:
                                 if isinstance(block, TextBlock):
                                     text_parts.append(block.text)
+                            thinking_text = extract_thinking_text(message.content)
+                            if thinking_text:
+                                thinking_parts.append(thinking_text)
                         elif isinstance(message, ResultMessage):
                             session_id = message.session_id
                             self._log_usage(thread_id, message, usage_log)
@@ -447,6 +484,7 @@ class ClaudeRunner:
                             raise RuntimeError("Prompt is too long and recovery summarization failed")
 
                     response_text = "\n".join(text_parts).strip()
+                    _log_claude_reasoning(thread_id, thinking_parts)
                     await _record_outcome(response_text, "task_complete", 1.0)
                     return response_text, session_id
 

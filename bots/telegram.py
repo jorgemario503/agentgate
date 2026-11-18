@@ -35,6 +35,10 @@ from runners.base import PlatformConfig, TaskInterrupted, check_blocked
 # ---------------------------------------------------------------------------
 telegram_store: SessionStore = None
 TELEGRAM_PLATFORM: PlatformConfig = None
+
+# Set in main() so the /reasoning command can report backend + model.
+REASONING_BACKEND: str = "claude"
+REASONING_MODEL: str = ""
 BOT_AGENT_ID: str = "telegram_assistant"
 
 _BOT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -428,6 +432,21 @@ async def cmd_autoapprove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _post(context, update.effective_chat.id, reply)
 
 
+async def cmd_reasoning(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _command_allowed(update, context):
+        return
+    thread_id = str(update.effective_chat.id)
+    reply = commands.reasoning_reply(
+        thread_id,
+        " ".join(context.args),
+        backend=REASONING_BACKEND,
+        model_id=REASONING_MODEL,
+        state=commands.reasoning_state_for(thread_id),
+        session_store=TELEGRAM_PLATFORM.session_store,
+    )
+    await _post(context, update.effective_chat.id, reply)
+
+
 # ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
@@ -436,6 +455,10 @@ async def main(backend: str = "claude", model: str | None = None, bot_name: str 
     token = configure_bot(bot_name)
     runner = await select_runner(backend, model)
     commands.use_runner(runner)
+
+    global REASONING_BACKEND, REASONING_MODEL
+    REASONING_BACKEND = backend or "claude"
+    REASONING_MODEL = model or getattr(runner, "model", "") or ""
 
     print(f"[startup] Backend: {backend}")
     if bot_name:
@@ -483,6 +506,7 @@ async def main(backend: str = "claude", model: str | None = None, bot_name: str 
     application.add_handler(CommandHandler("approve", cmd_approve, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("reject", cmd_reject, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("autoapprove", cmd_autoapprove, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("reasoning", cmd_reasoning, filters=filters.ChatType.PRIVATE))
     application.add_handler(
         MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, handle_message)
     )

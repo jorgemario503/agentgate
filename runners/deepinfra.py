@@ -23,6 +23,12 @@ from core.config import (
     SDK_ALLOWED_TOOLS,
     SYSTEM_PROMPT,
 )
+from core.reasoning import (
+    build_request_kwargs,
+    classify_outcome,
+    extract_reasoning_content,
+    resolve as resolve_reasoning,
+)
 from runners.base import (
     PlatformConfig, TaskInterrupted, check_blocked,
     _describe_ask_user_question, _resolve_ask_user_answer, _describe_tool_call,
@@ -468,6 +474,9 @@ class DeepInfraAgentClient:
         self.tools = tools if tools is not None else {}
         self.system_prompt = system_prompt
         self.can_use_tool = can_use_tool
+        # Reasoning: level is per-thread and set via the /reasoning command.
+        self._thread_id = session_id or ""
+        self._reasoning = None
         self.session_id = session_id or str(uuid.uuid4())
         self.session_store: SessionStore = session_store or JsonFileSessionStore()
         self.max_tool_iterations = max_tool_iterations
@@ -595,6 +604,20 @@ class DeepInfraAgentClient:
             except Exception as e:
                 print(f"[agentdb] on_compact callback error: {e}")
 
+    def _reasoning_state(self):
+        """Per-thread reasoning state owned by core.commands (level + verification)."""
+        if self._reasoning is None:
+            import core.commands as _commands
+            self._reasoning = _commands.reasoning_state_for(self._thread_id or "default")
+        return self._reasoning
+
+    def _reasoning_kwargs(self) -> dict:
+        state = self._reasoning_state()
+        if state.level == "off":
+            return {}
+        resolution = resolve_reasoning("deepinfra", self.model)
+        return build_request_kwargs(resolution, state.level, self.model)
+
     async def _call_deepinfra(self) -> dict:
         await self._maybe_compact_history()
         self._trim_history()
@@ -609,8 +632,37 @@ class DeepInfraAgentClient:
             kwargs["temperature"] = self.temperature
         if self.tools:
             kwargs["tools"] = [t.schema for t in self.tools.values()]
-        completion = await self._client.chat.completions.create(**kwargs)
-        return completion.model_dump(exclude_none=True)
+        kwargs.update(self._reasoning_kwargs())
+        try:
+            completion = await self._client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            state = self._reasoning_state()
+            if state.level != "off":
+                # Classify once; a rejection disables reasoning for this thread.
+                state.state, state.detail = classify_outcome(
+                    request_failed=True, error_message=str(exc), reasoning_text="",
+                )
+                if state.state == "rejected":
+                    state.level = "off"
+            raise
+        data = completion.model_dump(exclude_none=True)
+        self._record_reasoning(data)
+        return data
+
+    def _record_reasoning(self, data: dict) -> None:
+        state = self._reasoning_state()
+        if state.level == "off":
+            return
+        try:
+            message = data["choices"][0]["message"]
+        except (KeyError, IndexError):
+            return
+        text = extract_reasoning_content(message)
+        state.state, state.detail = classify_outcome(
+            request_failed=False, error_message="", reasoning_text=text,
+        )
+        if text:
+            state.last_reasoning = text
     @property
 
     def _max_tool_result_chars(self) -> int:
@@ -872,13 +924,16 @@ class DeepInfraRunner:
             return
         try:
             from agentdb.adapters.middleware import AgentDBMiddleware
-            from agentdb.adapters.capabilities import FIREWORKS_CAPABILITIES
+            # DeepInfra speaks the same OpenAI-compatible tool-calling protocol as
+            # Fireworks, and agentdb ships no DEEPINFRA_CAPABILITIES, so we reuse
+            # the Fireworks capability profile deliberately (not a copy-paste slip).
+            from agentdb.adapters.capabilities import FIREWORKS_CAPABILITIES as CAPABILITIES
         except ImportError:
             return
         self._agent_id = platform.agent_id
         self._agentdb = db
         self._agentdb_middleware = AgentDBMiddleware(
-            db=db, agent_id=platform.agent_id, capabilities=FIREWORKS_CAPABILITIES
+            db=db, agent_id=platform.agent_id, capabilities=CAPABILITIES
         )
 
     def list_pending_conflicts(self) -> list:

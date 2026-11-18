@@ -57,6 +57,11 @@ def make_platform() -> tuple[PlatformConfig, SessionStore]:
 # Runner selection — returns a class-based runner instance
 # ---------------------------------------------------------------------------
 
+# Set in main() so the /reasoning command can report backend + model.
+REASONING_BACKEND: str = "claude"
+REASONING_MODEL: str = ""
+
+
 async def select_runner(backend: str, model: str | None = None):
     if backend in ("ollama", "mlx", "local"):
         from runners.local import LocalRunner
@@ -278,6 +283,18 @@ def _register_handlers(platform: PlatformConfig):
             await _post(channel, thread_id, reply)
             return
 
+        if clean_text.lower() == "reasoning" or clean_text.lower().startswith("reasoning "):
+            reply = commands.reasoning_reply(
+                thread_id,
+                clean_text[len("reasoning"):].strip(),
+                backend=REASONING_BACKEND,
+                model_id=REASONING_MODEL,
+                state=commands.reasoning_state_for(thread_id),
+                session_store=store,
+            )
+            await _post(channel, thread_id, reply)
+            return
+
         # File attachments — download images/PDFs to workspace (Claude backend only)
         from runners.claude import ClaudeRunner
         slack_files = event.get("files", [])
@@ -341,7 +358,7 @@ def _register_handlers(platform: PlatformConfig):
 # ---------------------------------------------------------------------------
 
 async def main(backend: str = "claude", model: str | None = None):
-    global app
+    global app, REASONING_BACKEND, REASONING_MODEL
 
     bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
     if not bot_token:
@@ -354,6 +371,8 @@ async def main(backend: str = "claude", model: str | None = None):
     platform, store = make_platform()
     runner = await select_runner(backend, model)
     commands.use_runner(runner)
+    REASONING_BACKEND = backend or "claude"
+    REASONING_MODEL = model or getattr(runner, "model", "") or ""
     _register_handlers(platform)
 
     print(f"[startup] Backend: {backend}")

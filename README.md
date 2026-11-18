@@ -142,6 +142,9 @@ conversation history is fully isolated.
 | `/approve <proposal_id>` | Approve a proposal (admins only) |
 | `/reject <proposal_id> [reason]` | Reject a proposal (admins only) |
 | `/autoapprove on\|off` | Toggle auto-approval for this chat (admins only) |
+| `/reasoning off\|low\|medium\|high` | Set reasoning effort for this chat |
+| `/reasoning show` | Show the last captured reasoning trace |
+| `/reasoning` | Show current level, backend, model and verification state |
 
 ### Slack
 
@@ -149,6 +152,7 @@ conversation history is fully isolated.
 - `@bot stop session` · `@bot session status` · `@bot cancel`
 - `@bot conflicts` · `@bot proposals` · `@bot propose <name> <content>`
 - `@bot approve <id>` · `@bot reject <id>` · `@bot autoapprove on|off`
+- `@bot reasoning off|low|medium|high` · `@bot reasoning show` · `@bot reasoning`
 
 ---
 
@@ -173,6 +177,36 @@ Run command:
 Reply `yes` (allow once) or `no` (deny). Set `/autoapprove on` to skip approvals for the current session — blocked patterns and deny rules in `settings.json` still apply.
 
 **Auto-approval is reset on bot restart.** It is never persisted to disk.
+
+---
+
+## Reasoning mode
+
+`/reasoning low|medium|high` turns on extended reasoning for the current chat;
+`/reasoning` shows the current state and `/reasoning show` prints the last trace.
+Applies to every backend, with a different mechanism per provider:
+
+| Backend | Mechanism |
+|---|---|
+| DeepInfra / Fireworks / local | `reasoning_effort` (`extra_body` for providers that need it) |
+| Claude | `thinking: adaptive` (`display: summarized`) + `effort` |
+
+**Verification is honest, not assumed.** Each chat tracks one of three states:
+
+| State | Meaning |
+|---|---|
+| `verified` | The model actually returned reasoning content / thinking text. |
+| `unverified` | The request succeeded but no reasoning came back — shown as **"⚠️ Reasoning mode not verified"**. The model may be ignoring the parameter. |
+| `rejected` | The provider rejected the parameter (HTTP 400). Reasoning is turned off for that chat. |
+
+A small built-in registry (`core/reasoning/registry.py`) maps provider/model to the
+parameter shape. **If your model is not in the registry** the bot says so up front
+and still lets you try it — the result is then labelled `unverified` until the
+model proves otherwise by returning reasoning content.
+
+> Claude note: Opus 4.7+ returns thinking as signature-only by default, so we ask
+> for `display: "summarized"` when verifying. Missing thinking text on Claude is
+> reported as `unverified`, never as a rejection.
 
 ---
 

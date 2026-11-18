@@ -37,6 +37,12 @@ from core.config import (
     SDK_ALLOWED_TOOLS,
     SYSTEM_PROMPT,
 )
+from core.reasoning import (
+    build_request_kwargs,
+    classify_outcome,
+    extract_reasoning_content,
+    resolve as resolve_reasoning,
+)
 from runners.base import (
     PlatformConfig, TaskInterrupted, check_blocked,
     _describe_ask_user_question, _resolve_ask_user_answer, _describe_tool_call,
@@ -499,6 +505,8 @@ class FireworksAgentClient:
         self.tools = tools if tools is not None else {}
         self.system_prompt = system_prompt
         self.can_use_tool = can_use_tool
+        self._thread_id = session_id or ""
+        self._reasoning = None
         self.session_id = session_id or str(uuid.uuid4())
         self.session_store: SessionStore = session_store or JsonFileSessionStore()
         self.max_tool_iterations = max_tool_iterations
@@ -631,6 +639,34 @@ class FireworksAgentClient:
             except Exception as e:
                 print(f"[agentdb] on_compact callback error: {e}")
 
+    def _reasoning_state(self):
+        if self._reasoning is None:
+            import core.commands as _commands
+            self._reasoning = _commands.reasoning_state_for(self._thread_id or "default")
+        return self._reasoning
+
+    def _reasoning_kwargs(self) -> dict:
+        state = self._reasoning_state()
+        if state.level == "off":
+            return {}
+        resolution = resolve_reasoning("fireworks", self.model)
+        return build_request_kwargs(resolution, state.level, self.model)
+
+    def _record_reasoning(self, data: dict) -> None:
+        state = self._reasoning_state()
+        if state.level == "off":
+            return
+        try:
+            message = data["choices"][0]["message"]
+        except (KeyError, IndexError):
+            return
+        text = extract_reasoning_content(message)
+        state.state, state.detail = classify_outcome(
+            request_failed=False, error_message="", reasoning_text=text,
+        )
+        if text:
+            state.last_reasoning = text
+
     async def _call_fireworks(self) -> dict:
         await self._maybe_compact_history()
         self._trim_history()
@@ -643,8 +679,21 @@ class FireworksAgentClient:
         }
         if self.tools:
             kwargs["tools"] = [t.schema for t in self.tools.values()]
-        completion = await self._client.chat.completions.create(**kwargs)
-        return completion.to_dict()
+        kwargs.update(self._reasoning_kwargs())
+        try:
+            completion = await self._client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            state = self._reasoning_state()
+            if state.level != "off":
+                state.state, state.detail = classify_outcome(
+                    request_failed=True, error_message=str(exc), reasoning_text="",
+                )
+                if state.state == "rejected":
+                    state.level = "off"
+            raise
+        data = completion.to_dict()
+        self._record_reasoning(data)
+        return data
 
     @property
     def _max_tool_result_chars(self) -> int:
