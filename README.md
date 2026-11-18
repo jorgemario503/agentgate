@@ -142,6 +142,7 @@ conversation history is fully isolated.
 | `/approve <proposal_id>` | Approve a proposal (admins only) |
 | `/reject <proposal_id> [reason]` | Reject a proposal (admins only) |
 | `/autoapprove on\|off` | Toggle auto-approval for this chat (admins only) |
+| `/idle start\|stop` | Disable/enable the idle timeout for this chat |
 | `/help` | List every command |
 | `/reasoning off\|low\|medium\|high` | Set reasoning effort for this chat |
 | `/reasoning show` | Show the last captured reasoning trace |
@@ -210,6 +211,22 @@ resolved setting also records where it came from (`default` / `global` /
 `provider` / `cli`), which the CLI can display.
 
 ---
+
+## Idle timeout
+
+Sessions expire after `IDLE_TIMEOUT_SECONDS` (default 8h) of inactivity. To keep
+one alive, opt the chat out:
+
+```
+/idle start   # the reaper will skip this chat
+/idle stop    # restore normal expiry
+/idle         # show current state
+```
+
+Like `/autoapprove`, the flag is **in memory only** and resets when the bot
+restarts — but the conversation itself survives: serverless runners reload
+history from disk keyed by thread id, and the Claude SDK resumes from its own
+session id.
 
 ## Commands
 
