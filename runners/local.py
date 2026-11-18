@@ -36,6 +36,12 @@ from core.config import (
     SDK_ALLOWED_TOOLS,
     SYSTEM_PROMPT,
 )
+from core.reasoning import (
+    build_request_kwargs,
+    classify_outcome,
+    extract_reasoning_content,
+    resolve as resolve_reasoning,
+)
 from runners.base import (
     PlatformConfig, TaskInterrupted, check_blocked,
     _describe_ask_user_question, _resolve_ask_user_answer, _describe_tool_call,
@@ -429,6 +435,9 @@ class LocalAgentClient:
         self.max_tokens = max_tokens
         self.summary_chunk_chars = summary_chunk_chars
         self.summary_max_tokens = summary_max_tokens
+        # Reasoning: level is per-thread, set via the /reasoning command.
+        self._thread_id = session_id or ""
+        self._reasoning = None
 
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if api_key:
@@ -573,6 +582,35 @@ class LocalAgentClient:
             except Exception as e:
                 print(f"[agentdb] on_compact callback error: {e}")
 
+    def _reasoning_state(self):
+        """Per-thread reasoning state owned by core.commands (level + verification)."""
+        if self._reasoning is None:
+            import core.commands as _commands
+            self._reasoning = _commands.reasoning_state_for(self._thread_id or "default")
+        return self._reasoning
+
+    def _reasoning_payload(self) -> dict:
+        state = self._reasoning_state()
+        if state.level == "off":
+            return {}
+        resolution = resolve_reasoning("local", self.model)
+        return build_request_kwargs(resolution, state.level, self.model)
+
+    def _record_reasoning(self, data: dict) -> None:
+        state = self._reasoning_state()
+        if state.level == "off":
+            return
+        try:
+            message = data["choices"][0]["message"]
+        except (KeyError, IndexError):
+            return
+        text = extract_reasoning_content(message)
+        state.state, state.detail = classify_outcome(
+            request_failed=False, error_message="", reasoning_text=text,
+        )
+        if text:
+            state.last_reasoning = text
+
     async def _call_local(self) -> dict:
         await self._maybe_compact_history()
         self._trim_history()
@@ -585,9 +623,31 @@ class LocalAgentClient:
         }
         if self.tools:
             payload["tools"] = [t.schema for t in self.tools.values()]
-        response = await self._http.post("/chat/completions", json=payload)
-        response.raise_for_status()
-        return response.json()
+        payload.update(self._reasoning_payload())
+        try:
+            response = await self._http.post("/chat/completions", json=payload)
+            response.raise_for_status()
+        except Exception as exc:
+            state = self._reasoning_state()
+            if state.level != "off":
+                body = ""
+                resp = getattr(exc, "response", None)
+                if resp is not None:
+                    try:
+                        body = resp.text[:400]
+                    except Exception:
+                        body = ""
+                state.state, state.detail = classify_outcome(
+                    request_failed=True,
+                    error_message=f"{exc} {body}".strip(),
+                    reasoning_text="",
+                )
+                if state.state == "rejected":
+                    state.level = "off"
+            raise
+        data = response.json()
+        self._record_reasoning(data)
+        return data
 
     @property
     def _max_tool_result_chars(self) -> int:
