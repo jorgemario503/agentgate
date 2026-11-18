@@ -218,7 +218,6 @@ def reasoning_reply(
     "mlx"). `state` is the per-thread ReasoningRuntimeState owned by the runner.
     """
     from core.reasoning import REASONING_LEVELS, resolve
-    from core.reasoning.registry import lookup
 
     arg = raw_args.strip().lower()
 
