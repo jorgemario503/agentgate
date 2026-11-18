@@ -142,6 +142,7 @@ conversation history is fully isolated.
 | `/approve <proposal_id>` | Approve a proposal (admins only) |
 | `/reject <proposal_id> [reason]` | Reject a proposal (admins only) |
 | `/autoapprove on\|off` | Toggle auto-approval for this chat (admins only) |
+| `/help` | List every command |
 | `/reasoning off\|low\|medium\|high` | Set reasoning effort for this chat |
 | `/reasoning show` | Show the last captured reasoning trace |
 | `/reasoning` | Show current level, backend, model and verification state |
@@ -209,6 +210,22 @@ resolved setting also records where it came from (`default` / `global` /
 `provider` / `cli`), which the CLI can display.
 
 ---
+
+## Commands
+
+Every command is declared once in `core/commands.py` (`COMMANDS`) and both bots
+dispatch through the same entry point, so the command set, admin rules and
+usage text cannot drift between platforms:
+
+```python
+CommandSpec("reasoning", _cmd_reasoning, takes_args=True,
+            usage="reasoning off|low|medium|high|show",
+            description="Set reasoning effort")
+```
+
+Adding a command is one entry — no per-bot wiring. Telegram and Slack accept the
+same names; `stop session` and `session status` remain as aliases for the older
+Slack spelling, and `/help` is generated from the registry.
 
 ## Reasoning mode
 

@@ -10,7 +10,8 @@ returned string back through its own transport.
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Optional
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
 import core.approvals as approvals
 from runners.base import PlatformConfig
@@ -318,3 +319,190 @@ def _reasoning_status(backend: str, model_id: str, state) -> str:
     lines.append("Show the last trace with: reasoning show")
     return "\n".join(lines)
 
+
+# ---------------------------------------------------------------------------
+# Command registry — single dispatch table shared by every bot
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class CommandSpec:
+    """One user-facing command.
+
+    ``name`` is the canonical form. ``aliases`` are alternative spellings that
+    also map here (e.g. Slack historically used "stop session" and
+    "session status"). ``admin_only`` commands are refuse-closed for
+    non-admins. ``takes_args`` documents whether trailing text is meaningful.
+    """
+
+    name: str
+    handler: Callable[["CommandContext"], Awaitable[str]]
+    aliases: tuple[str, ...] = ()
+    admin_only: bool = False
+    takes_args: bool = False
+    usage: str = ""
+    description: str = ""
+
+
+@dataclass
+class CommandContext:
+    """Everything a command handler needs, independent of the platform."""
+
+    platform: PlatformConfig
+    thread_id: str
+    user_id: Optional[str]
+    args: str = ""
+    # Optional extras some commands need; None when the bot did not supply them.
+    backend: str = "claude"
+    model_id: str = ""
+    session_store: object = None
+
+    @property
+    def is_admin(self) -> bool:
+        return is_admin(self.platform, self.user_id)
+
+
+# ---------------------------------------------------------------------------
+# Handlers — adapt the existing *_reply functions to the uniform signature
+# ---------------------------------------------------------------------------
+
+async def _cmd_cancel(ctx: CommandContext) -> str:
+    return await cancel_reply(ctx.thread_id)
+
+
+async def _cmd_stop(ctx: CommandContext) -> str:
+    return await stop_session_reply(ctx.thread_id, _store(ctx))
+
+
+async def _cmd_status(ctx: CommandContext) -> str:
+    return await session_status_reply(ctx.thread_id, _store(ctx))
+
+
+async def _cmd_conflicts(ctx: CommandContext) -> str:
+    return await conflicts_reply()
+
+
+async def _cmd_proposals(ctx: CommandContext) -> str:
+    return await proposals_reply()
+
+
+async def _cmd_propose(ctx: CommandContext) -> str:
+    return await propose_reply(ctx.args)
+
+
+async def _cmd_approve(ctx: CommandContext) -> str:
+    return await approve_reply(ctx.args, is_admin=ctx.is_admin)
+
+
+async def _cmd_reject(ctx: CommandContext) -> str:
+    return await reject_reply(ctx.args, is_admin=ctx.is_admin)
+
+
+async def _cmd_autoapprove(ctx: CommandContext) -> str:
+    return await autoapprove_reply(
+        ctx.thread_id,
+        ctx.args,
+        is_admin=ctx.is_admin,
+        user_id=ctx.user_id,
+        session_store=_store(ctx),
+    )
+
+
+async def _cmd_help(ctx: CommandContext) -> str:
+    return command_help()
+
+
+async def _cmd_reasoning(ctx: CommandContext) -> str:
+    return reasoning_reply(
+        ctx.thread_id,
+        ctx.args,
+        backend=ctx.backend,
+        model_id=ctx.model_id,
+        state=reasoning_state_for(ctx.thread_id),
+        session_store=_store(ctx),
+    )
+
+
+def _store(ctx: CommandContext):
+    """Session store from the context, falling back to the platform's."""
+    return ctx.session_store or ctx.platform.session_store
+
+
+COMMANDS: tuple[CommandSpec, ...] = (
+    CommandSpec("stop", _cmd_stop, aliases=("stop session",), description="End the current session"),
+    CommandSpec("status", _cmd_status, aliases=("session status",), description="Show session status"),
+    CommandSpec("cancel", _cmd_cancel, description="Interrupt the in-flight turn"),
+    CommandSpec("conflicts", _cmd_conflicts, description="List pending memory conflicts"),
+    CommandSpec("proposals", _cmd_proposals, description="List pending skill proposals"),
+    CommandSpec("propose", _cmd_propose, takes_args=True, usage="propose <name> <content>",
+                description="Draft a skill proposal"),
+    CommandSpec("approve", _cmd_approve, takes_args=True, admin_only=True, usage="approve <id>",
+                description="Approve a skill proposal"),
+    CommandSpec("reject", _cmd_reject, takes_args=True, admin_only=True, usage="reject <id> [reason]",
+                description="Reject a skill proposal"),
+    CommandSpec("autoapprove", _cmd_autoapprove, takes_args=True, admin_only=True,
+                usage="autoapprove on|off", description="Toggle auto-approval"),
+    CommandSpec("reasoning", _cmd_reasoning, takes_args=True, usage="reasoning off|low|medium|high|show",
+                description="Set reasoning effort"),
+    CommandSpec("help", _cmd_help, description="List available commands"),
+)
+
+
+def _build_index() -> dict[str, CommandSpec]:
+    index: dict[str, CommandSpec] = {}
+    for spec in COMMANDS:
+        index[spec.name.lower()] = spec
+        for alias in spec.aliases:
+            index[alias.lower()] = spec
+    return index
+
+
+_INDEX = _build_index()
+
+
+def _normalise(text: str) -> str:
+    return " ".join(text.strip().lower().split())
+
+
+def parse_command(text: str) -> tuple[CommandSpec, str] | None:
+    """Match user text against the registry.
+
+    Longest match first so "stop session" beats a hypothetical bare "stop".
+    Returns (spec, args) or None when the text is not a command.
+    """
+    if not text:
+        return None
+    normalised = _normalise(text)
+    if not normalised:
+        return None
+
+    for candidate in sorted(_INDEX, key=len, reverse=True):
+        if normalised == candidate:
+            return _INDEX[candidate], ""
+        if normalised.startswith(candidate + " "):
+            return _INDEX[candidate], normalised[len(candidate) + 1:].strip()
+    return None
+
+
+async def dispatch(text: str, ctx: CommandContext) -> str | None:
+    """Run the matching command, or return None when the text is not one."""
+    match = parse_command(text)
+    if match is None:
+        return None
+    spec, args = match
+    if spec.admin_only and not ctx.is_admin:
+        return f"🚫 Only admins can use `{spec.name}`."
+    ctx.args = args
+    if spec.takes_args and not args and spec.usage:
+        # Commands that need input show usage instead of an opaque error.
+        if spec.name in ("propose", "approve", "reject", "autoapprove"):
+            return f"Usage: {spec.usage}"
+    return await spec.handler(ctx)
+
+
+def command_help() -> str:
+    """Markdown help generated from the registry."""
+    lines = ["Available commands:"]
+    for spec in COMMANDS:
+        suffix = " (admins)" if spec.admin_only else ""
+        lines.append(f"- `{spec.usage or spec.name}` — {spec.description}{suffix}")
+    return "\n".join(lines)

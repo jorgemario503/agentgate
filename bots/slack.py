@@ -235,64 +235,20 @@ def _register_handlers(platform: PlatformConfig):
 
         runner = commands._require_runner()
 
-        if clean_text.lower() == "cancel":
-            await _post(channel, thread_id, await commands.cancel_reply(thread_id))
-            return
-
-        if clean_text.lower() == "stop session":
-            reply = await commands.stop_session_reply(thread_id, store)
-            await _post(channel, thread_id, reply)
-            return
-
-        if clean_text.lower() == "session status":
-            reply = await commands.session_status_reply(thread_id, store)
-            await _post(channel, thread_id, reply)
-            return
-
-        if clean_text.lower() == "conflicts":
-            await _post(channel, thread_id, await commands.conflicts_reply())
-            return
-
-        if clean_text.lower() == "proposals":
-            await _post(channel, thread_id, await commands.proposals_reply())
-            return
-
-        if clean_text.lower().startswith("propose "):
-            reply = await commands.propose_reply(clean_text[len("propose "):])
-            await _post(channel, thread_id, reply)
-            return
-
-        if clean_text.lower().startswith("approve "):
-            is_admin = commands.is_admin(platform, user_id)
-            reply = await commands.approve_reply(clean_text[len("approve "):], is_admin=is_admin)
-            await _post(channel, thread_id, reply)
-            return
-
-        if clean_text.lower().startswith("reject "):
-            is_admin = commands.is_admin(platform, user_id)
-            reply = await commands.reject_reply(clean_text[len("reject "):], is_admin=is_admin)
-            await _post(channel, thread_id, reply)
-            return
-
-        if clean_text.lower().startswith("autoapprove "):
-            is_admin = commands.is_admin(platform, user_id)
-            reply = await commands.autoapprove_reply(
-                thread_id, clean_text[len("autoapprove "):], is_admin=is_admin,
-                user_id=user_id, session_store=store,
-            )
-            await _post(channel, thread_id, reply)
-            return
-
-        if clean_text.lower() == "reasoning" or clean_text.lower().startswith("reasoning "):
-            reply = commands.reasoning_reply(
-                thread_id,
-                clean_text[len("reasoning"):].strip(),
-                backend=REASONING_BACKEND,
-                model_id=REASONING_MODEL,
-                state=commands.reasoning_state_for(thread_id),
-                session_store=store,
-            )
-            await _post(channel, thread_id, reply)
+        # Commands are defined once in core.commands.COMMANDS; Slack only
+        # adapts its event into a CommandContext. Unmatched text falls through
+        # to the normal agent turn below.
+        command_ctx = commands.CommandContext(
+            platform=platform,
+            thread_id=thread_id,
+            user_id=user_id,
+            backend=REASONING_BACKEND,
+            model_id=REASONING_MODEL,
+            session_store=store,
+        )
+        command_reply = await commands.dispatch(clean_text, command_ctx)
+        if command_reply is not None:
+            await _post(channel, thread_id, command_reply)
             return
 
         # File attachments — download images/PDFs to workspace (Claude backend only)
