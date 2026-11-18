@@ -23,6 +23,7 @@ from core.config import (
     SDK_ALLOWED_TOOLS,
     SYSTEM_PROMPT,
 )
+from core.providers import settings_for
 from core.reasoning import (
     build_request_kwargs,
     classify_outcome,
@@ -46,17 +47,12 @@ class ModelSpec:
     context_window: int | None
 
 
-def _optional_int(key: str) -> int | None:
-    value = os.getenv(key, "").strip()
-    return int(value) if value else None
+# All provider configuration comes from core.providers (single source of truth).
+_SETTINGS = settings_for("deepinfra")
 
-def _optional_float(key: str) -> float | None:
-    value = os.getenv(key, "").strip()
-    return float(value) if value else None
-
-TEMPERATURE = _optional_float("DEEPINFRA_TEMPERATURE")
-MAX_TOKENS = _optional_int("DEEPINFRA_MAX_TOKENS")
-DEFAULT_CONTEXT_WINDOW = _optional_int("DEEPINFRA_CONTEXT_WINDOW")
+TEMPERATURE = _SETTINGS.temperature
+MAX_TOKENS = _SETTINGS.max_tokens
+DEFAULT_CONTEXT_WINDOW = _SETTINGS.context_window
 
 
 import re as _re
@@ -69,7 +65,7 @@ def _extract_dirs(text: str) -> list[str]:
     return _re.findall(r'/(?:[\w./-]+/)+', text)
 
 def resolve_model(value: str | None) -> ModelSpec:
-    raw = (value or os.getenv("DEEPINFRA_MODEL", "")).strip()
+    raw = (value or settings_for("deepinfra").model or "").strip()
     if not raw:
         raise ValueError("Set DEEPINFRA_MODEL or provide --model")
     return ModelSpec(raw, raw, DEFAULT_CONTEXT_WINDOW)
@@ -81,10 +77,10 @@ def resolve_model(value: str | None) -> ModelSpec:
 
 TOKEN_CHAR_RATIO = 3.5
 HISTORY_RESERVE_TOKENS = 2000
-SUMMARY_MODEL_ID = os.getenv("DEEPINFRA_SUMMARY_MODEL", "").strip()
-SUMMARY_MAX_TOKENS = _optional_int("DEEPINFRA_SUMMARY_MAX_TOKENS")
-SUMMARY_TEMPERATURE = _optional_float("DEEPINFRA_SUMMARY_TEMPERATURE")
-SUMMARY_CHUNK_CHARS = _optional_int("DEEPINFRA_SUMMARY_CHUNK_CHARS") or 20_000
+SUMMARY_MODEL_ID = _SETTINGS.summary_model or ""
+SUMMARY_MAX_TOKENS = _SETTINGS.summary_max_tokens
+SUMMARY_TEMPERATURE = _SETTINGS.summary_temperature
+SUMMARY_CHUNK_CHARS = _SETTINGS.summary_chunk_chars
 COMPACT_TRIGGER_RATIO = 0.7
 COMPACT_TARGET_RATIO = 0.5
 _SUMMARY_SYSTEM_PROMPT = (
@@ -463,13 +459,13 @@ class DeepInfraAgentClient:
         self.context_window = context_window
         self.temperature = TEMPERATURE
         self.max_tokens = MAX_TOKENS
-        api_key = api_key or os.environ.get("DEEPINFRA_API_KEY")
+        settings = settings_for("deepinfra")
+        api_key = api_key or settings.api_key
         if not api_key:
             raise ValueError("Set DEEPINFRA_API_KEY or pass api_key=")
         self._client = AsyncOpenAI(
             api_key=api_key,
-            base_url=os.getenv("DEEPINFRA_BASE_URL", "").strip()
-                     or "https://api.deepinfra.com/v1/openai",
+            base_url=settings.base_url or "https://api.deepinfra.com/v1/openai",
         )
         self.tools = tools if tools is not None else {}
         self.system_prompt = system_prompt
@@ -895,8 +891,7 @@ class DeepInfraRunner:
 
     @classmethod
     def from_env(cls, model: str | None = None) -> "DeepInfraRunner":
-        if not os.getenv("DEEPINFRA_API_KEY", "").strip():
-            raise ValueError("Set DEEPINFRA_API_KEY")
+        settings_for("deepinfra").require_api_key()
         return cls(model=model)
 
     def __init__(self, model: str | None = None):

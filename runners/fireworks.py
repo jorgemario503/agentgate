@@ -37,6 +37,7 @@ from core.config import (
     SDK_ALLOWED_TOOLS,
     SYSTEM_PROMPT,
 )
+from core.providers import settings_for
 from core.reasoning import (
     build_request_kwargs,
     classify_outcome,
@@ -63,8 +64,11 @@ class ModelSpec:
 DEFAULT_MODEL_NAME = "minimax-m3"
 DEFAULT_CONTEXT_WINDOW = 512_000
 
-TEMPERATURE = float(os.environ.get("FIREWORKS_TEMPERATURE", "0.2"))
-MAX_TOKENS = int(os.environ.get("FIREWORKS_MAX_TOKENS", "4096"))
+# All provider configuration comes from core.providers (single source of truth).
+_SETTINGS = settings_for("fireworks")
+
+TEMPERATURE = _SETTINGS.temperature if _SETTINGS.temperature is not None else 0.2
+MAX_TOKENS = _SETTINGS.max_tokens if _SETTINGS.max_tokens is not None else 4096
 
 
 def _parse_full_model_id(model_id: str) -> tuple[str, str] | None:
@@ -104,12 +108,10 @@ def resolve_model(value: str | None) -> ModelSpec:
 TOKEN_CHAR_RATIO = 3.5
 HISTORY_RESERVE_TOKENS = 2000
 
-SUMMARY_MODEL_ID = os.environ.get(
-    "FIREWORKS_SUMMARY_MODEL", "accounts/fireworks/models/llama-v3p1-8b-instruct"
-)
-SUMMARY_MAX_TOKENS = int(os.environ.get("FIREWORKS_SUMMARY_MAX_TOKENS", "3072"))
-SUMMARY_TEMPERATURE = 0.2
-SUMMARY_CHUNK_CHARS = int(os.environ.get("FIREWORKS_SUMMARY_CHUNK_CHARS", str(20_000)))
+SUMMARY_MODEL_ID = _SETTINGS.summary_model or "accounts/fireworks/models/llama-v3p1-8b-instruct"
+SUMMARY_MAX_TOKENS = _SETTINGS.summary_max_tokens if _SETTINGS.summary_max_tokens is not None else 3072
+SUMMARY_TEMPERATURE = _SETTINGS.summary_temperature if _SETTINGS.summary_temperature is not None else 0.2
+SUMMARY_CHUNK_CHARS = _SETTINGS.summary_chunk_chars
 COMPACT_TRIGGER_RATIO = 0.7
 COMPACT_TARGET_RATIO = 0.5
 
@@ -494,7 +496,7 @@ class FireworksAgentClient:
     ):
         self.model = model
         self.context_window = context_window
-        api_key = api_key or os.environ.get("FIREWORKS_API_KEY")
+        api_key = api_key or settings_for("fireworks").api_key
         if not api_key:
             raise ValueError("Set FIREWORKS_API_KEY or pass api_key=")
         if not _FIREWORKS_AVAILABLE:
@@ -957,7 +959,7 @@ class FireworksRunner:
 
     def __init__(self, model: str | None = None):
         self._model: ModelSpec = resolve_model(
-            model or os.environ.get("FIREWORKS_MODEL")
+            model or settings_for("fireworks").model
         )
         self._clients: dict[str, FireworksAgentClient] = {}
         self._locks: dict[str, asyncio.Lock] = {}
@@ -972,7 +974,7 @@ class FireworksRunner:
     async def set_model(self, value: str | None) -> ModelSpec:
         """Resolve model and optionally look up its context window from Fireworks."""
         spec = resolve_model(value)
-        api_key = os.environ.get("FIREWORKS_API_KEY")
+        api_key = settings_for("fireworks").api_key
         if api_key and _FIREWORKS_AVAILABLE:
             try:
                 client = AsyncFireworks(api_key=api_key)

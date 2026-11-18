@@ -36,6 +36,7 @@ from core.config import (
     SDK_ALLOWED_TOOLS,
     SYSTEM_PROMPT,
 )
+from core.providers import settings_for
 from core.reasoning import (
     build_request_kwargs,
     classify_outcome,
@@ -923,19 +924,19 @@ class LocalRunner:
 
     @classmethod
     def from_env(cls, name: str) -> "LocalRunner":
-        """Build a LocalRunner from env vars with the given prefix (e.g. 'ollama' → OLLAMA_*)."""
-        prefix = name.upper()
+        """Build a LocalRunner from the provider spec (e.g. 'ollama' -> OLLAMA_*)."""
+        settings = settings_for(name.lower())
         return cls(
-            name=name,
-            base_url=os.environ.get(f"{prefix}_BASE_URL", ""),
-            model=os.environ.get(f"{prefix}_MODEL", ""),
-            api_key=os.environ.get(f"{prefix}_API_KEY", "local"),
-            summary_model=os.environ.get(f"{prefix}_SUMMARY_MODEL", ""),
-            context_window=int(os.environ.get(f"{prefix}_CONTEXT_WINDOW", "32768")),
-            temperature=float(os.environ.get(f"{prefix}_TEMPERATURE", "0.2")),
-            max_tokens=int(os.environ.get(f"{prefix}_MAX_TOKENS", "4096")),
-            summary_chunk_chars=int(os.environ.get("LOCAL_SUMMARY_CHUNK_CHARS", "20000")),
-            summary_max_tokens=2048,
+            name=settings.name,
+            base_url=settings.base_url or "",
+            model=settings.model or "",
+            api_key=settings.api_key or "local",
+            summary_model=settings.summary_model or "",
+            context_window=settings.context_window or 32_768,
+            temperature=settings.temperature if settings.temperature is not None else 0.2,
+            max_tokens=settings.max_tokens or 4096,
+            summary_chunk_chars=settings.summary_chunk_chars,
+            summary_max_tokens=settings.summary_max_tokens or 2048,
         )
 
     def set_model(self, value: str | None) -> str:
