@@ -84,8 +84,99 @@ def test_summary_knobs_are_uniform_across_providers():
 def test_iter_provider_vars_covers_every_spec():
     variables = iter_provider_vars()
     names = {name for name, _ in variables}
-    assert len(variables) == len(PROVIDERS) * 10
+    assert len(variables) == len(PROVIDERS) * 13
     assert "DEEPINFRA_MODEL" in names
     assert "FIREWORKS_MODEL" in names
     assert "OLLAMA_MODEL" in names
     assert "MLX_MODEL" in names
+
+
+# --------------------------------------------------------------------------
+# 4-layer cascade: default -> global -> provider -> CLI
+# --------------------------------------------------------------------------
+
+def test_default_when_nothing_is_set():
+    settings = settings_for("ollama", environ={})
+    assert settings.max_tool_iterations == 25
+    assert settings.source_of("MAX_TOOL_ITERATIONS") == "default"
+
+
+def test_global_override_applies_to_every_provider():
+    env = {"MAX_TOOL_ITERATIONS": "40"}
+    for provider in PROVIDERS:
+        settings = settings_for(provider, environ=env)
+        assert settings.max_tool_iterations == 40
+        assert settings.source_of("MAX_TOOL_ITERATIONS") == "global"
+
+
+def test_provider_override_beats_global():
+    env = {"MAX_TOOL_ITERATIONS": "40", "DEEPINFRA_MAX_TOOL_ITERATIONS": "60"}
+    settings = settings_for("deepinfra", environ=env)
+    assert settings.max_tool_iterations == 60
+    assert settings.source_of("MAX_TOOL_ITERATIONS") == "provider"
+
+    # Other providers still see the global value.
+    assert settings_for("ollama", environ=env).max_tool_iterations == 40
+
+
+def test_cli_override_beats_provider():
+    env = {"MAX_TOOL_ITERATIONS": "40", "DEEPINFRA_MAX_TOOL_ITERATIONS": "60"}
+    settings = settings_for(
+        "deepinfra", environ=env, cli_overrides={"MAX_TOOL_ITERATIONS": "80"}
+    )
+    assert settings.max_tool_iterations == 80
+    assert settings.source_of("MAX_TOOL_ITERATIONS") == "cli"
+
+
+def test_cli_override_supports_prefixed_name():
+    settings = settings_for(
+        "deepinfra", environ={}, cli_overrides={"DEEPINFRA_MAX_TOOL_ITERATIONS": "90"}
+    )
+    assert settings.max_tool_iterations == 90
+    assert settings.source_of("MAX_TOOL_ITERATIONS") == "cli"
+
+
+def test_provider_identity_vars_are_not_global():
+    # MODEL has no global layer: a bare MODEL variable must not leak in.
+    settings = settings_for("ollama", environ={"MODEL": "should-be-ignored"})
+    assert settings.model is None
+
+
+def test_global_override_of_sampling_reaches_runners():
+    settings = settings_for("fireworks", environ={"TEMPERATURE": "0.9"})
+    assert settings.temperature == pytest.approx(0.9)
+    assert settings.source_of("TEMPERATURE") == "global"
+
+
+def test_describe_reports_source_for_each_setting():
+    settings = settings_for(
+        "ollama", environ={"MAX_TOOL_ITERATIONS": "40"}
+    )
+    lines = settings.describe()
+    assert any("MAX_TOOL_ITERATIONS=40 (from global)" in line for line in lines)
+    assert any("(default)" in line for line in lines)
+
+
+def test_cli_overrides_transported_via_environment():
+    env = {"AGENTGATE_SET": "MAX_TOOL_ITERATIONS=77,TEMPERATURE=0.9"}
+    settings = settings_for("deepinfra", environ=env)
+    assert settings.max_tool_iterations == 77
+    assert settings.temperature == pytest.approx(0.9)
+    assert settings.source_of("MAX_TOOL_ITERATIONS") == "cli"
+
+
+def test_parse_cli_overrides_rejects_malformed_pairs():
+    from core.providers import parse_cli_overrides
+    assert parse_cli_overrides(["A=1"]) == {"A": "1"}
+    with pytest.raises(ValueError, match="KEY=VALUE"):
+        parse_cli_overrides(["nope"])
+
+
+def test_iter_global_vars_lists_overridable_keys():
+    from core.providers import iter_global_vars
+    names = [name for name, _ in iter_global_vars()]
+    assert "MAX_TOOL_ITERATIONS" in names
+    assert "TEMPERATURE" in names
+    # provider-identity keys are intentionally absent
+    assert "API_KEY" not in names
+    assert "MODEL" not in names

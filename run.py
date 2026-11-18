@@ -60,17 +60,40 @@ class BotSpec:
         return ["-m", f"bots.{self.channel}"]
 
 
-def parse_argv(argv: list[str]) -> tuple[list[BotSpec], bool]:
-    """Parse run.py's CLI args. Returns (specs, list_bots_requested).
-    Raises SystemExit on malformed input."""
+def parse_argv(argv: list[str]) -> tuple[list[BotSpec], bool, dict[str, str]]:
+    """Parse run.py's CLI args.
+
+    Returns (specs, list_bots_requested, cli_overrides). ``--set KEY=VALUE`` may
+    be repeated and applies to every bot started by this run (highest
+    precedence, above per-provider variables).
+    Raises SystemExit on malformed input.
+    """
     specs: list[BotSpec] = []
     list_bots = False
+    overrides: dict[str, str] = {}
     i = 0
     while i < len(argv):
         tok = argv[i]
         if tok == "--list-bots":
             list_bots = True
             i += 1
+            continue
+        if tok == "--set" or tok.startswith("--set="):
+            if tok == "--set":
+                if i + 1 >= len(argv):
+                    raise SystemExit("--set expects KEY=VALUE")
+                pair = argv[i + 1]
+                i += 2
+            else:
+                pair = tok[len("--set="):]
+                i += 1
+            if "=" not in pair:
+                raise SystemExit(f"--set expects KEY=VALUE, got {pair!r}")
+            key, _, value = pair.partition("=")
+            key = key.strip()
+            if not key:
+                raise SystemExit(f"--set expects KEY=VALUE, got {pair!r}")
+            overrides[key] = value.strip()
             continue
         if tok.startswith("--") and tok[2:] in CHANNELS_NO_ARGS:
             specs.append(BotSpec(channel=tok[2:]))
@@ -99,7 +122,7 @@ def parse_argv(argv: list[str]) -> tuple[list[BotSpec], bool]:
             specs.append(BotSpec(channel="telegram", runner=runner, bot_id=bot_id, model=model))
             continue
         raise SystemExit(f"unknown flag: {tok!r}")
-    return specs, list_bots
+    return specs, list_bots, overrides
 
 
 # ---------------------------------------------------------------------------
@@ -200,16 +223,19 @@ async def _wait_and_report(label: str, proc: asyncio.subprocess.Process) -> int:
     return code
 
 
-async def run_all(bots: list[tuple[str, list[str]]]) -> int:
+async def run_all(bots: list[tuple[str, list[str]]], env_extra: dict[str, str] | None = None) -> int:
     """Spawn every (label, argv) pair as a subprocess, stream their output
     prefixed by label, forward SIGINT/SIGTERM to all children, and return
     0 iff every child exited 0. A child exiting doesn't stop the others."""
     procs: list[tuple[str, asyncio.subprocess.Process]] = []
     for label, argv in bots:
+        env = dict(os.environ)
+        env.update(env_extra or {})
         proc = await asyncio.create_subprocess_exec(
             *argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            env=env,
             start_new_session=True,
         )
         procs.append((label, proc))
@@ -238,7 +264,7 @@ async def run_all(bots: list[tuple[str, list[str]]]) -> int:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    specs, list_bots = parse_argv(sys.argv[1:])
+    specs, list_bots, overrides = parse_argv(sys.argv[1:])
 
     if list_bots:
         print_known_telegram_bots()
@@ -265,7 +291,11 @@ def main() -> int:
         (spec.label(), [sys.executable, "-u"] + spec.script_argv())
         for spec in specs
     ]
-    return asyncio.run(run_all(bots))
+    env_extra: dict[str, str] = {}
+    if overrides:
+        env_extra["AGENTGATE_SET"] = ",".join(f"{k}={v}" for k, v in overrides.items())
+        print(f"[config] CLI overrides: {env_extra['AGENTGATE_SET']}")
+    return asyncio.run(run_all(bots, env_extra))
 
 
 if __name__ == "__main__":

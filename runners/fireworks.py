@@ -244,7 +244,8 @@ def _tool_schema(name: str, description: str, params: dict, required: list[str])
     }
 
 
-_OUTPUT_CAP = 8000
+_OUTPUT_CAP = settings_for("fireworks").tool_output_cap
+_BASH_TIMEOUT_SECONDS = settings_for("fireworks").bash_timeout_seconds
 
 
 def _resolve(cwd: str, path: str) -> Path:
@@ -259,10 +260,10 @@ def _make_bash(cwd: str) -> Callable[[dict], str]:
             return "ERROR: no command provided"
         try:
             proc = subprocess.run(
-                cmd, shell=True, cwd=cwd, capture_output=True, text=True, timeout=120,
+                cmd, shell=True, cwd=cwd, capture_output=True, text=True, timeout=_BASH_TIMEOUT_SECONDS,
             )
         except subprocess.TimeoutExpired:
-            return "ERROR: command timed out after 120s"
+            return f"ERROR: command timed out after {_BASH_TIMEOUT_SECONDS}s"
         except Exception as e:
             return f"ERROR: {e}"
         out = proc.stdout or ""
@@ -490,7 +491,7 @@ class FireworksAgentClient:
         can_use_tool: Optional[CanUseTool] = None,
         session_id: Optional[str] = None,
         session_store: Optional[SessionStore] = None,
-        max_tool_iterations: int = 25,
+        max_tool_iterations: int = settings_for("fireworks").max_tool_iterations,
         context_window: int = DEFAULT_CONTEXT_WINDOW,
         on_compact: Optional[Callable[[str], None]] = None,
     ):

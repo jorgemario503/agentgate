@@ -180,6 +180,36 @@ Reply `yes` (allow once) or `no` (deny). Set `/autoapprove on` to skip approvals
 
 ---
 
+## Configuration and overrides
+
+Runner settings resolve through four layers (lowest to highest):
+
+1. built-in default
+2. **global** override, e.g. `MAX_TOOL_ITERATIONS=60`
+3. **per-provider** override, e.g. `DEEPINFRA_MAX_TOOL_ITERATIONS=80`
+4. **CLI** override, e.g. `--set MAX_TOOL_ITERATIONS=99` (this run only)
+
+Globally overridable: `MAX_TOOL_ITERATIONS`, `TOOL_OUTPUT_CAP`, `BASH_TIMEOUT_SECONDS`, `TEMPERATURE`, `MAX_TOKENS`, `CONTEXT_WINDOW`, `SUMMARY_MODEL`, `SUMMARY_MAX_TOKENS`, `SUMMARY_TEMPERATURE`, `SUMMARY_CHUNK_CHARS`.
+
+Always per-provider (never global): `API_KEY`, `BASE_URL`, `MODEL`.
+
+```bash
+# Global default, one line in .env
+MAX_TOOL_ITERATIONS=40
+
+# This provider only
+DEEPINFRA_MAX_TOOL_ITERATIONS=60
+
+# One-off experiment, no file edits (highest precedence)
+python run.py --telegram ollama surfer qwen3:14b --set MAX_TOOL_ITERATIONS=99 --set TEMPERATURE=0.9
+```
+
+`--set KEY=VALUE` may be repeated and applies to every bot in that run. Each
+resolved setting also records where it came from (`default` / `global` /
+`provider` / `cli`), which the CLI can display.
+
+---
+
 ## Reasoning mode
 
 `/reasoning low|medium|high` turns on extended reasoning for the current chat;

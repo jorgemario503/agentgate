@@ -1,27 +1,69 @@
-"""Declarative provider specs for the open-model (OpenAI-compatible) runners.
+"""Declarative provider specs + layered configuration resolution.
 
-Single source of truth for every configuration variable those runners read.
+Single source of truth for every setting the open-model (OpenAI-compatible)
+runners read, and the only place that knows about precedence.
 
-Rules
------
-* Per-provider variable names, prefixed by the provider (DeepInfra, Fireworks,
-  Ollama, MLX).
-* Runners receive a ``ProviderSettings`` and must not read the process
-  environment directly.
-* A ``None`` default means "leave it unset" - used for values the provider
-  itself should decide (e.g. DeepInfra temperature), so we omit them from the
-  request instead of inventing a value.
-* Summary/compaction knobs are uniform across providers, defaulting to the
-  historical per-provider values so behaviour does not change.
+Resolution order (lowest to highest priority)
+---------------------------------------------
+1. built-in default from the ProviderSpec
+2. global override            ``MAX_TOOL_ITERATIONS``
+3. per-provider override      ``DEEPINFRA_MAX_TOOL_ITERATIONS``
+4. CLI override               ``--set MAX_TOOL_ITERATIONS=60`` (process only)
 
-Claude is deliberately NOT part of this module. It has no credential, no base
-URL and no sampling knobs, so forcing it into this shape would produce a spec
-full of meaningless nulls.
+Every resolved value records where it came from, so a future CLI/TUI can show
+"Temperature: 0.9 (from CLI)" without re-reading any configuration itself.
+
+Providers that are inherently provider-specific (connection + model identity)
+do NOT participate in the global layer: ``API_KEY``, ``BASE_URL``, ``MODEL``.
+
+Internal algorithm constants (token estimation, compaction ratios) are not
+exposed: they are correctness knobs, not user settings.
 """
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any, Callable
+
+# Suffixes that may also be set globally.
+GLOBAL_OVERRIDABLE: tuple[str, ...] = (
+    "TEMPERATURE",
+    "MAX_TOKENS",
+    "CONTEXT_WINDOW",
+    "MAX_TOOL_ITERATIONS",
+    "TOOL_OUTPUT_CAP",
+    "BASH_TIMEOUT_SECONDS",
+    "SUMMARY_MODEL",
+    "SUMMARY_MAX_TOKENS",
+    "SUMMARY_TEMPERATURE",
+    "SUMMARY_CHUNK_CHARS",
+)
+
+# Provider-identity suffixes: no global layer.
+PROVIDER_ONLY: tuple[str, ...] = ("API_KEY", "BASE_URL", "MODEL")
+
+SOURCE_DEFAULT = "default"
+SOURCE_GLOBAL = "global"
+SOURCE_PROVIDER = "provider"
+SOURCE_CLI = "cli"
+
+
+@dataclass(frozen=True)
+class Resolved:
+    """A resolved setting plus provenance, suitable for display in a CLI/TUI."""
+
+    key: str
+    value: Any
+    source: str
+
+    @property
+    def is_default(self) -> bool:
+        return self.source == SOURCE_DEFAULT
+
+    def describe(self) -> str:
+        if self.source == SOURCE_DEFAULT:
+            return f"{self.key}={self.value} (default)"
+        return f"{self.key}={self.value} (from {self.source})"
 
 
 @dataclass(frozen=True)
@@ -40,10 +82,31 @@ class ProviderSpec:
     summary_max_tokens_default: int | None
     summary_temperature_default: float | None
     summary_chunk_chars_default: int
+    max_tool_iterations_default: int = 25
+    tool_output_cap_default: int = 8_000
+    bash_timeout_seconds_default: int = 120
     supports_extra_body: bool = False
 
     def env(self, suffix: str) -> str:
         return f"{self.env_prefix}_{suffix}"
+
+    def defaults(self) -> dict[str, Any]:
+        """Built-in defaults keyed by suffix."""
+        return {
+            "BASE_URL": self.base_url_default,
+            "API_KEY": None,
+            "MODEL": self.model_default,
+            "CONTEXT_WINDOW": self.context_window_default,
+            "TEMPERATURE": self.temperature_default,
+            "MAX_TOKENS": self.max_tokens_default,
+            "MAX_TOOL_ITERATIONS": self.max_tool_iterations_default,
+            "TOOL_OUTPUT_CAP": self.tool_output_cap_default,
+            "BASH_TIMEOUT_SECONDS": self.bash_timeout_seconds_default,
+            "SUMMARY_MODEL": self.summary_model_default,
+            "SUMMARY_MAX_TOKENS": self.summary_max_tokens_default,
+            "SUMMARY_TEMPERATURE": self.summary_temperature_default,
+            "SUMMARY_CHUNK_CHARS": self.summary_chunk_chars_default,
+        }
 
 
 PROVIDERS: dict[str, ProviderSpec] = {
@@ -106,23 +169,125 @@ PROVIDERS: dict[str, ProviderSpec] = {
 }
 
 
+_CASTERS: dict[str, Callable[[str], Any]] = {
+    "CONTEXT_WINDOW": int,
+    "MAX_TOKENS": int,
+    "MAX_TOOL_ITERATIONS": int,
+    "TOOL_OUTPUT_CAP": int,
+    "BASH_TIMEOUT_SECONDS": int,
+    "SUMMARY_MAX_TOKENS": int,
+    "SUMMARY_CHUNK_CHARS": int,
+    "TEMPERATURE": float,
+    "SUMMARY_TEMPERATURE": float,
+}
+
+
+def _cast(suffix: str, raw: str) -> Any:
+    caster = _CASTERS.get(suffix, str)
+    value = raw.strip()
+    return caster(value) if value else None
+
+
+def _resolve_suffix(
+    spec: ProviderSpec,
+    suffix: str,
+    env: dict[str, str],
+    cli_overrides: dict[str, str],
+) -> Resolved:
+    """Apply the 4-layer cascade for one setting of one provider."""
+    key = spec.env(suffix)
+
+    # 4. CLI override (highest) - provider-prefixed name, or the bare name for
+    #    suffixes that are also globally overridable.
+    if key in cli_overrides:
+        return Resolved(key, _cast(suffix, cli_overrides[key]), SOURCE_CLI)
+    if suffix in GLOBAL_OVERRIDABLE and suffix in cli_overrides:
+        return Resolved(key, _cast(suffix, cli_overrides[suffix]), SOURCE_CLI)
+
+    # 3. Per-provider variable.
+    raw = (env.get(key) or "").strip()
+    if raw:
+        return Resolved(key, _cast(suffix, raw), SOURCE_PROVIDER)
+
+    # 2. Global override (only for suffixes that participate).
+    if suffix in GLOBAL_OVERRIDABLE:
+        global_raw = (env.get(suffix) or "").strip()
+        if global_raw:
+            return Resolved(key, _cast(suffix, global_raw), SOURCE_GLOBAL)
+
+    # 1. Built-in default.
+    return Resolved(key, spec.defaults().get(suffix), SOURCE_DEFAULT)
+
+
 @dataclass(frozen=True)
 class ProviderSettings:
-    """Resolved values for one provider, read from the process environment."""
+    """Resolved values for one provider, with provenance for each setting."""
 
     name: str
-    base_url: str | None
-    api_key: str
-    model: str | None
-    context_window: int | None
-    temperature: float | None
-    max_tokens: int | None
-    summary_model: str | None
-    summary_max_tokens: int | None
-    summary_temperature: float | None
-    summary_chunk_chars: int
-    supports_extra_body: bool
+    resolved: dict[str, Resolved] = field(default_factory=dict)
 
+    # --- convenience accessors -------------------------------------------------
+    def get(self, suffix: str) -> Any:
+        entry = self.resolved.get(suffix)
+        return entry.value if entry else None
+
+    def source_of(self, suffix: str) -> str:
+        entry = self.resolved.get(suffix)
+        return entry.source if entry else SOURCE_DEFAULT
+
+    @property
+    def base_url(self) -> str | None:
+        return self.get("BASE_URL")
+
+    @property
+    def api_key(self) -> str:
+        return self.get("API_KEY") or ""
+
+    @property
+    def model(self) -> str | None:
+        return self.get("MODEL")
+
+    @property
+    def context_window(self) -> int | None:
+        return self.get("CONTEXT_WINDOW")
+
+    @property
+    def temperature(self) -> float | None:
+        return self.get("TEMPERATURE")
+
+    @property
+    def max_tokens(self) -> int | None:
+        return self.get("MAX_TOKENS")
+
+    @property
+    def max_tool_iterations(self) -> int:
+        return self.get("MAX_TOOL_ITERATIONS") or 25
+
+    @property
+    def tool_output_cap(self) -> int:
+        return self.get("TOOL_OUTPUT_CAP") or 8_000
+
+    @property
+    def bash_timeout_seconds(self) -> int:
+        return self.get("BASH_TIMEOUT_SECONDS") or 120
+
+    @property
+    def summary_model(self) -> str | None:
+        return self.get("SUMMARY_MODEL")
+
+    @property
+    def summary_max_tokens(self) -> int | None:
+        return self.get("SUMMARY_MAX_TOKENS")
+
+    @property
+    def summary_temperature(self) -> float | None:
+        return self.get("SUMMARY_TEMPERATURE")
+
+    @property
+    def summary_chunk_chars(self) -> int:
+        return self.get("SUMMARY_CHUNK_CHARS") or 20_000
+
+    # --- validation ------------------------------------------------------------
     def require_model(self) -> str:
         if not self.model:
             raise ValueError(
@@ -135,20 +300,35 @@ class ProviderSettings:
             raise ValueError(f"Set {PROVIDERS[self.name].env('API_KEY')}")
         return self.api_key
 
-
-def _read_str(env: dict[str, str], key: str, default: str | None) -> str | None:
-    raw = (env.get(key) or "").strip()
-    return raw or default
-
-
-def _read_int(env: dict[str, str], key: str, default: int | None) -> int | None:
-    raw = (env.get(key) or "").strip()
-    return int(raw) if raw else default
+    def describe(self) -> list[str]:
+        """Human-readable "key=value (source)" lines, for logs or a future TUI."""
+        return [self.resolved[k].describe() for k in sorted(self.resolved)]
 
 
-def _read_float(env: dict[str, str], key: str, default: float | None) -> float | None:
-    raw = (env.get(key) or "").strip()
-    return float(raw) if raw else default
+CLI_OVERRIDES_VAR = "AGENTGATE_SET"
+
+
+def parse_cli_overrides(pairs: list[str] | None) -> dict[str, str]:
+    """Parse ["KEY=VALUE", ...] into a dict. Raises ValueError on bad input."""
+    out: dict[str, str] = {}
+    for item in pairs or []:
+        if "=" not in item:
+            raise ValueError(f"--set expects KEY=VALUE, got {item!r}")
+        key, _, value = item.partition("=")
+        key = key.strip()
+        if not key:
+            raise ValueError(f"--set expects KEY=VALUE, got {item!r}")
+        out[key] = value.strip()
+    return out
+
+
+def cli_overrides_from_env(environ: dict[str, str] | None = None) -> dict[str, str]:
+    """Read overrides handed to a bot subprocess via the CLI_OVERRIDES_VAR."""
+    env = dict(os.environ if environ is None else environ)
+    raw = env.get(CLI_OVERRIDES_VAR, "").strip()
+    if not raw:
+        return {}
+    return parse_cli_overrides(raw.split(","))
 
 
 def settings_for(
@@ -157,10 +337,12 @@ def settings_for(
     environ: dict[str, str] | None = None,
     model_override: str | None = None,
     api_key_override: str | None = None,
+    cli_overrides: dict[str, str] | None = None,
 ) -> ProviderSettings:
-    """Resolve a provider's settings from the environment.
+    """Resolve a provider's settings through the 4-layer cascade.
 
-    ``environ`` is injectable for tests; production passes the process env.
+    ``environ`` and ``cli_overrides`` are injectable for tests; production
+    passes the process environment plus the ``--set`` values from the CLI.
     """
     spec = PROVIDERS.get(provider.lower())
     if spec is None:
@@ -168,46 +350,38 @@ def settings_for(
             f"Unknown provider {provider!r}. Known: {', '.join(sorted(PROVIDERS))}"
         )
     env = dict(os.environ if environ is None else environ)
+    overrides = cli_overrides_from_env(env)
+    overrides.update(cli_overrides or {})
 
-    return ProviderSettings(
-        name=spec.name,
-        base_url=_read_str(env, spec.env("BASE_URL"), spec.base_url_default),
-        api_key=(api_key_override or _read_str(env, spec.env("API_KEY"), "") or ""),
-        model=(model_override or _read_str(env, spec.env("MODEL"), spec.model_default)),
-        context_window=_read_int(env, spec.env("CONTEXT_WINDOW"), spec.context_window_default),
-        temperature=_read_float(env, spec.env("TEMPERATURE"), spec.temperature_default),
-        max_tokens=_read_int(env, spec.env("MAX_TOKENS"), spec.max_tokens_default),
-        summary_model=_read_str(env, spec.env("SUMMARY_MODEL"), spec.summary_model_default),
-        summary_max_tokens=_read_int(
-            env, spec.env("SUMMARY_MAX_TOKENS"), spec.summary_max_tokens_default
-        ),
-        summary_temperature=_read_float(
-            env, spec.env("SUMMARY_TEMPERATURE"), spec.summary_temperature_default
-        ),
-        summary_chunk_chars=_read_int(
-            env, spec.env("SUMMARY_CHUNK_CHARS"), spec.summary_chunk_chars_default
-        ) or spec.summary_chunk_chars_default,
-        supports_extra_body=spec.supports_extra_body,
-    )
+    if model_override:
+        overrides[spec.env("MODEL")] = model_override
+    if api_key_override:
+        overrides[spec.env("API_KEY")] = api_key_override
+
+    resolved = {
+        suffix: _resolve_suffix(spec, suffix, env, overrides)
+        for suffix in spec.defaults()
+    }
+    return ProviderSettings(name=spec.name, resolved=resolved)
 
 
 def iter_provider_vars() -> list[tuple[str, str | None]]:
-    """(variable_name, default_as_text) for every provider variable - used for docs."""
-    getters = [
-        ("BASE_URL", lambda s: s.base_url_default),
-        ("API_KEY", lambda s: None),
-        ("MODEL", lambda s: s.model_default),
-        ("CONTEXT_WINDOW", lambda s: s.context_window_default),
-        ("TEMPERATURE", lambda s: s.temperature_default),
-        ("MAX_TOKENS", lambda s: s.max_tokens_default),
-        ("SUMMARY_MODEL", lambda s: s.summary_model_default),
-        ("SUMMARY_MAX_TOKENS", lambda s: s.summary_max_tokens_default),
-        ("SUMMARY_TEMPERATURE", lambda s: s.summary_temperature_default),
-        ("SUMMARY_CHUNK_CHARS", lambda s: s.summary_chunk_chars_default),
-    ]
+    """(variable_name, built-in default) for docs generation."""
     out: list[tuple[str, str | None]] = []
     for spec in PROVIDERS.values():
-        for suffix, getter in getters:
-            value = getter(spec)
+        for suffix, value in spec.defaults().items():
             out.append((spec.env(suffix), None if value is None else str(value)))
+    return out
+
+
+def iter_global_vars() -> list[tuple[str, str | None]]:
+    """Global override names and the default they fall back to, for docs."""
+    out: list[tuple[str, str | None]] = []
+    for suffix in GLOBAL_OVERRIDABLE:
+        default = None
+        for spec in PROVIDERS.values():
+            default = spec.defaults().get(suffix)
+            if default is not None:
+                break
+        out.append((suffix, None if default is None else str(default)))
     return out

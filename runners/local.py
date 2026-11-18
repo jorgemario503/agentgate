@@ -190,7 +190,8 @@ def _tool_schema(name: str, description: str, params: dict, required: list[str])
     }
 
 
-_OUTPUT_CAP = 8000
+_OUTPUT_CAP = 8_000  # overridden per-provider in from_env()
+_BASH_TIMEOUT_SECONDS = 120
 
 
 def _resolve(cwd: str, path: str) -> Path:
@@ -204,7 +205,7 @@ def _make_bash(cwd: str) -> Callable[[dict], str]:
         if not cmd:
             return "ERROR: no command provided"
         try:
-            proc = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True, timeout=120)
+            proc = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True, timeout=_BASH_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             return "ERROR: command timed out after 120s"
         except Exception as e:
@@ -420,7 +421,7 @@ class LocalAgentClient:
         can_use_tool: Optional[CanUseTool] = None,
         session_id: Optional[str] = None,
         session_store: Optional[SessionStore] = None,
-        max_tool_iterations: int = 25,
+        max_tool_iterations: int = 25,  # overridden per-provider in from_env()
         context_window: int = 32_768,
         temperature: float = 0.2,
         max_tokens: int = 4096,
