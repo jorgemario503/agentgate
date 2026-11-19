@@ -33,7 +33,7 @@ Sessions are isolated per platform and per thread, stored under
 | Backend | Flag | Requires |
 |---|---|---|
 | Claude (default) | `--claude` | `claude` CLI logged in |
-| Fireworks | `--fireworks` | `pip install "fireworks-ai>=1.2.0"` + `FIREWORKS_API_KEY` |
+| Fireworks | `--fireworks` | `FIREWORKS_API_KEY` + `FIREWORKS_MODEL` |
 | DeepInfra | `--deepinfra` | `DEEPINFRA_API_KEY` + `DEEPINFRA_MODEL` |
 | Ollama | `--ollama` | Ollama server running, `OLLAMA_MODEL` |
 | MLX | `--mlx` | mlx-lm server running, `MLX_MODEL` |
@@ -233,11 +233,10 @@ python run.py --telegram ollama surfer qwen3:14b \
 [ARCHITECTURE.md](ARCHITECTURE.md#configuration-precedence) for how precedence
 and origin tracking work.
 
-### Custom system prompts (non-Claude runners)
+### Custom system prompts
 
-The system prompt for the local, fireworks and deepinfra runners can be
-overridden without editing source. Drop a file in `prompts/` — or point
-`AGENTGATE_PROMPTS_DIR` at your own directory:
+Prompt text can be overridden without editing source. Drop a file in
+`prompts/` — or point `AGENTGATE_PROMPTS_DIR` at your own directory:
 
 | File | Replaces |
 |---|---|
@@ -246,8 +245,10 @@ overridden without editing source. Drop a file in `prompts/` — or point
 | `resume.md` | the opening lines of the resume block |
 | `summary.md` | the compaction summariser's instructions |
 
+All four files ship and are active, so the usual route is to edit them in
+place. Use `AGENTGATE_PROMPTS_DIR` only to keep your copies outside the repo:
+
 ```bash
-cp prompts/base.md prompts/base.md   # already shipped; edit your copy
 export AGENTGATE_PROMPTS_DIR=/path/to/my-prompts
 ```
 
@@ -399,11 +400,14 @@ agentgate/
 ├── permissions.yaml          # AgentDB write permissions
 ├── docs/slack-manifest.yaml  # Slack app manifest (tiered scopes)
 │
+├── prompts/                  # editable prompt text: base.md, hard_rules.md,
+│                             #   resume.md, summary.md (all runners read these)
 ├── bots/                     # transport: slack.py, telegram.py, whatsapp.py
 ├── runners/                  # execution: base.py, claude.py, deepinfra.py,
 │                             #            fireworks.py, local.py
-├── core/                     # shared: config, providers, sessions, approvals,
-│                             #         commands, agentdb, reasoning/
+├── core/                     # shared: config, providers, sessions, prompts,
+│                             #   history, cache_key, approvals, commands,
+│                             #   agentdb, reasoning/
 └── tests/
 ```
 

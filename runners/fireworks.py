@@ -3,7 +3,8 @@ Fireworks runner — OpenAI-compatible chat-completions endpoint.
 
 No `claude` binary required. Bring your own FIREWORKS_API_KEY.
 
-Requires: pip install "fireworks-ai>=1.2.0"
+Rides on the `openai` package with a Fireworks base_url, so no vendor SDK is
+needed — this runner works from the base requirements.
 """
 from __future__ import annotations
 

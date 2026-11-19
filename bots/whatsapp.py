@@ -87,14 +87,7 @@ async def select_runner(backend: str, model: str | None = None):
         return runner
 
     if backend == "fireworks":
-        try:
-            from runners.fireworks import FireworksRunner
-        except ImportError as e:
-            raise SystemExit(
-                "❌ --fireworks selected but the Fireworks SDK isn't installed.\n"
-                "   Run:  pip install \"fireworks-ai>=1.2.0\"\n"
-                f"   (import error: {e})"
-            )
+        from runners.fireworks import FireworksRunner
         runner = FireworksRunner()
         active = await runner.set_model(model)
         print(f"[fireworks] active model: {active}")

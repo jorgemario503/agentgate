@@ -25,6 +25,5 @@ openai>=1.0.0,<3.0.0
 # Distribution name is `agentdatabase`; the import name remains `agentdb`.
 agentdatabase>=0.1.0
 
-# Fireworks runner (optional — only needed for --fireworks)
-# pip install "fireworks-ai>=1.2.0"
+# Fireworks runner uses the openai package above — no vendor SDK required.
 

@@ -12,7 +12,7 @@ AI coding agents. For how the system fits together, read
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python -m pytest -q          # expect 249 passing
+python -m pytest -q          # expect 361 passing
 ```
 
 Never work without a green baseline. If tests fail before you start, fix or
@@ -33,6 +33,8 @@ you need one, copy `.env.example`. That file stays out of version control.
 | A model backend | `runners/<backend>.py` | a bot module |
 | A shared setting | `core/providers.py` | hardcoded in a runner |
 | Cross-platform logic | `core/` | duplicated per bot |
+| Prompt text | `prompts/*.md` | a string constant in a runner |
+| Prompt assembly | `core/prompts.py` | each runner concatenating its own |
 
 Two dependency rules are non-negotiable:
 
@@ -132,6 +134,53 @@ Real regressions from this repository's history. Check your change against these
 4. **In-memory state assumed persistent.** Auto-approval and idle-bypass are
    deliberately in-memory. Do not "fix" them by writing to disk without
    discussing the security tradeoff.
+5. **Insert-if-absent losing to a stale copy.** `connect()` inserted the system
+   prompt only when the reloaded history had none — but the saved history always
+   starts with the previous process's system message, so every freshly built
+   prompt was discarded on resume. When a default is "fill it in if missing",
+   ask what happens when a stale value is already there.
+6. **A dependency the runner does not need.** `fireworks.py` imported its own
+   SDK and raised in `__init__` without it, making `--fireworks` the only
+   backend that failed on a fresh install. Both hosted runners ride on `openai`
+   with a `base_url` override; `local` keeps raw `httpx` on purpose.
+7. **Calls with no import, in paths tests never run.** `build_summary_prompt()`
+   was called in all three open-model runners without being imported: it only
+   runs during compaction, so a green suite hid a `NameError`. `pyflakes` found
+   it, along with a WhatsApp handler using `runner` where the module-level
+   `_runner` was meant. Run `python -m pyflakes core/ bots/ runners/` and do not
+   assume coverage reaches long-tail paths.
+8. **Tests that assert on source text instead of behaviour.** A check that a
+   helper's *name* appeared in a bot passed even when the helper was sabotaged
+   to always return `True`. Assert the decision, not the identifier.
+
+---
+
+## Prompts
+
+Prompt text lives in `prompts/*.md`; assembly lives in `core/prompts.py`.
+Never put prompt strings back in a runner.
+
+| Surface | File | Fallback constant |
+|---|---|---|
+| base instructions | `prompts/base.md` | `FALLBACK_BASE` |
+| hard rules | `prompts/hard_rules.md` | `FALLBACK_HARD_RULES` |
+| resume block opening | `prompts/resume.md` | `FALLBACK_RESUME` |
+| compaction summariser | `prompts/summary.md` | `FALLBACK_SUMMARY` |
+
+Rules:
+
+- **All four runners read these files**, Claude included. `hard_rules.md` is
+  appended to Claude's preset prompt and folded into the open-model base
+  prompt, so one edit reaches every backend.
+- **Section headings are structural.** They live in `SECTION_HEADINGS` and are
+  injected by the builder; a prompt file must not repeat one. Changing a
+  heading is a contract change, not a wording change.
+- **Keep the prefix stable.** Providers cache from the first character and
+  discard the cached prefix on the first difference. Never put timestamps,
+  turn counters, thread ids or paths in the prefix.
+- **Falling back must never yield an empty prompt.** A missing or unreadable
+  file returns its `FALLBACK_*` constant; an empty override loses to the
+  fallback for the same reason.
 
 ---
 
