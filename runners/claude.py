@@ -13,7 +13,13 @@ import json
 import os
 import time
 import uuid
+from pathlib import Path
 
+from runners.claude_reasoning import (
+    build_claude_options,
+    extract_thinking_text,
+    record_claude_outcome,
+)
 from claude_agent_sdk import (
     ClaudeAgentOptions,
     ClaudeSDKClient,
@@ -47,6 +53,33 @@ DIRECTORY_TOOL_NAMES = [
     "mcp__directory_tools__lookup_directory",
     "mcp__directory_tools__remember_directory",
 ]
+
+
+def _log_claude_reasoning(thread_id: str, thinking_parts: list[str]) -> None:
+    """Record whether Claude actually returned thinking text for this turn."""
+    import core.commands as _commands
+
+    state = _commands.reasoning_state_for(thread_id)
+    if state.level == "off":
+        return
+    joined = "\n\n".join(thinking_parts).strip()
+    detail = record_claude_outcome(state, joined)
+    if detail:
+        print(f"[reasoning] {thread_id}: {state.state}")
+
+
+def _claude_reasoning_options(thread_id: str) -> dict:
+    """ClaudeAgentOptions fields for the thread's current reasoning level."""
+    import core.commands as _commands
+
+    state = _commands.reasoning_state_for(thread_id)
+    config = build_claude_options(state.level, adaptive=True)
+    out: dict = {}
+    if config.thinking is not None:
+        out["thinking"] = config.thinking
+    if config.effort is not None:
+        out["effort"] = config.effort
+    return out
 
 
 async def _haiku_summarize(prompt: str) -> str:
@@ -130,6 +163,8 @@ class ClaudeRunner:
         self._agentdb_middleware = None
         self._agent_id: str = "agent"
         self._interrupt_requested: set[str] = set()
+        # Needed so close_client can hand AgentDB a session-summary path.
+        self._session_workspace_paths: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Runner protocol
@@ -199,6 +234,15 @@ class ClaudeRunner:
                 await client.disconnect()
             except Exception:
                 pass
+        if self._agentdb_middleware is not None:
+            ws_path = self._session_workspace_paths.pop(thread_id, None)
+            if ws_path:
+                jsonl_path = str(Path(ws_path) / "session_summary.jsonl")
+                try:
+                    await self._agentdb_middleware.end_session(thread_id, jsonl_path)
+                except Exception as e:
+                    print(f"[agentdb] end_session error: {e}")
+        self._session_workspace_paths.pop(thread_id, None)
         self._locks.pop(thread_id, None)
 
     async def close_all(self) -> None:
@@ -346,6 +390,7 @@ class ClaudeRunner:
             setting_sources=["project"],
             add_dirs=ADDITIONAL_DIRS,
             resume=resume,
+            **_claude_reasoning_options(thread_id),
         )
         client = ClaudeSDKClient(options=options)
         await client.connect()
@@ -378,6 +423,7 @@ class ClaudeRunner:
         async with self._lock_for(thread_id):
             try:
                 try:
+                    self._session_workspace_paths[thread_id] = workspace_path
                     client = await self._get_or_create_client(
                         thread_id, workspace_path, resume_session_id, post_fn, platform
                     )
@@ -416,11 +462,15 @@ class ClaudeRunner:
                     session_id = resume_session_id
                     _prompt_too_long = False
 
+                    thinking_parts: list[str] = []
                     async for message in client.receive_response():
                         if isinstance(message, AssistantMessage):
                             for block in message.content:
                                 if isinstance(block, TextBlock):
                                     text_parts.append(block.text)
+                            thinking_text = extract_thinking_text(message.content)
+                            if thinking_text:
+                                thinking_parts.append(thinking_text)
                         elif isinstance(message, ResultMessage):
                             session_id = message.session_id
                             self._log_usage(thread_id, message, usage_log)
@@ -447,6 +497,7 @@ class ClaudeRunner:
                             raise RuntimeError("Prompt is too long and recovery summarization failed")
 
                     response_text = "\n".join(text_parts).strip()
+                    _log_claude_reasoning(thread_id, thinking_parts)
                     await _record_outcome(response_text, "task_complete", 1.0)
                     return response_text, session_id
 

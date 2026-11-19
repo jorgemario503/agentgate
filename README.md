@@ -22,6 +22,7 @@ Each bot runs as a private-chat conversation with a long-lived agent session. Th
 |---|---|---|
 | Claude (default) | `--claude` | `claude` CLI logged in |
 | Fireworks | `--fireworks` | `pip install fireworks-ai` + `FIREWORKS_API_KEY` |
+| DeepInfra | `--deepinfra` | `DEEPINFRA_API_KEY` + `DEEPINFRA_MODEL` (`openai` is in requirements) |
 | Ollama | `--ollama` | Ollama server running, `OLLAMA_MODEL` |
 | MLX | `--mlx` | mlx-lm server running, `MLX_MODEL` |
 
@@ -141,6 +142,11 @@ conversation history is fully isolated.
 | `/approve <proposal_id>` | Approve a proposal (admins only) |
 | `/reject <proposal_id> [reason]` | Reject a proposal (admins only) |
 | `/autoapprove on\|off` | Toggle auto-approval for this chat (admins only) |
+| `/idle start\|stop` | Disable/enable the idle timeout for this chat |
+| `/help` | List every command |
+| `/reasoning off\|low\|medium\|high` | Set reasoning effort for this chat |
+| `/reasoning show` | Show the last captured reasoning trace |
+| `/reasoning` | Show current level, backend, model and verification state |
 
 ### Slack
 
@@ -148,6 +154,7 @@ conversation history is fully isolated.
 - `@bot stop session` · `@bot session status` · `@bot cancel`
 - `@bot conflicts` · `@bot proposals` · `@bot propose <name> <content>`
 - `@bot approve <id>` · `@bot reject <id>` · `@bot autoapprove on|off`
+- `@bot reasoning off|low|medium|high` · `@bot reasoning show` · `@bot reasoning`
 
 ---
 
@@ -172,6 +179,98 @@ Run command:
 Reply `yes` (allow once) or `no` (deny). Set `/autoapprove on` to skip approvals for the current session — blocked patterns and deny rules in `settings.json` still apply.
 
 **Auto-approval is reset on bot restart.** It is never persisted to disk.
+
+---
+
+## Configuration and overrides
+
+Runner settings resolve through four layers (lowest to highest):
+
+1. built-in default
+2. **global** override, e.g. `MAX_TOOL_ITERATIONS=60`
+3. **per-provider** override, e.g. `DEEPINFRA_MAX_TOOL_ITERATIONS=80`
+4. **CLI** override, e.g. `--set MAX_TOOL_ITERATIONS=99` (this run only)
+
+Globally overridable: `MAX_TOOL_ITERATIONS`, `TOOL_OUTPUT_CAP`, `BASH_TIMEOUT_SECONDS`, `TEMPERATURE`, `MAX_TOKENS`, `CONTEXT_WINDOW`, `SUMMARY_MODEL`, `SUMMARY_MAX_TOKENS`, `SUMMARY_TEMPERATURE`, `SUMMARY_CHUNK_CHARS`.
+
+Always per-provider (never global): `API_KEY`, `BASE_URL`, `MODEL`.
+
+```bash
+# Global default, one line in .env
+MAX_TOOL_ITERATIONS=40
+
+# This provider only
+DEEPINFRA_MAX_TOOL_ITERATIONS=60
+
+# One-off experiment, no file edits (highest precedence)
+python run.py --telegram ollama surfer qwen3:14b --set MAX_TOOL_ITERATIONS=99 --set TEMPERATURE=0.9
+```
+
+`--set KEY=VALUE` may be repeated and applies to every bot in that run. Each
+resolved setting also records where it came from (`default` / `global` /
+`provider` / `cli`), which the CLI can display.
+
+---
+
+## Idle timeout
+
+Sessions expire after `IDLE_TIMEOUT_SECONDS` (default 8h) of inactivity. To keep
+one alive, opt the chat out:
+
+```
+/idle start   # the reaper will skip this chat
+/idle stop    # restore normal expiry
+/idle         # show current state
+```
+
+Like `/autoapprove`, the flag is **in memory only** and resets when the bot
+restarts — but the conversation itself survives: serverless runners reload
+history from disk keyed by thread id, and the Claude SDK resumes from its own
+session id.
+
+## Commands
+
+Every command is declared once in `core/commands.py` (`COMMANDS`) and both bots
+dispatch through the same entry point, so the command set, admin rules and
+usage text cannot drift between platforms:
+
+```python
+CommandSpec("reasoning", _cmd_reasoning, takes_args=True,
+            usage="reasoning off|low|medium|high|show",
+            description="Set reasoning effort")
+```
+
+Adding a command is one entry — no per-bot wiring. Telegram and Slack accept the
+same names; `stop session` and `session status` remain as aliases for the older
+Slack spelling, and `/help` is generated from the registry.
+
+## Reasoning mode
+
+`/reasoning low|medium|high` turns on extended reasoning for the current chat;
+`/reasoning` shows the current state and `/reasoning show` prints the last trace.
+Applies to every backend, with a different mechanism per provider:
+
+| Backend | Mechanism |
+|---|---|
+| DeepInfra / Fireworks / local | `reasoning_effort` (`extra_body` for providers that need it) |
+| Claude | `thinking: adaptive` (`display: summarized`) + `effort` |
+
+**Verification is honest, not assumed.** Each chat tracks one of three states:
+
+| State | Meaning |
+|---|---|
+| `verified` | The model actually returned reasoning content / thinking text. |
+| `unverified` | The request succeeded but no reasoning came back — shown as **"⚠️ Reasoning mode not verified"**. The model may be ignoring the parameter. |
+| `rejected` | The provider rejected the parameter (HTTP 400). Reasoning is turned off for that chat. |
+
+A small built-in registry (`core/reasoning/registry.py`) maps provider/model to the
+parameter shape. **If your model is not in the registry** the bot says so up front
+and still lets you try it — the result is then labelled `unverified` until the
+model proves otherwise by returning reasoning content.
+
+> Claude note: Opus 4.7+ returns thinking as signature-only by default, so we ask
+> for `display: "summarized"` when verifying. Missing thinking text on Claude is
+> reported as `unverified`, never as a rejection.
 
 ---
 

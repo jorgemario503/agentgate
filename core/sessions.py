@@ -14,6 +14,24 @@ from core.config import (
 )
 
 
+# Threads that opted out of the idle reaper via /idle start.
+# In-memory only: resets on restart, like auto-approval.
+_keep_alive: set[str] = set()
+
+
+def enable_keep_alive(thread_id: str) -> None:
+    """Stop the idle reaper from expiring this thread."""
+    _keep_alive.add(thread_id)
+
+
+def disable_keep_alive(thread_id: str) -> None:
+    _keep_alive.discard(thread_id)
+
+
+def is_keep_alive(thread_id: str) -> bool:
+    return thread_id in _keep_alive
+
+
 class SessionStore:
     """
     One instance per platform (Slack, Telegram, ...). Each instance owns
@@ -145,6 +163,8 @@ class SessionStore:
             now = time.time()
 
             for thread_id, meta in list(registry.items()):
+                if is_keep_alive(thread_id):
+                    continue
                 idle = now - meta["last_activity"]
                 if idle > IDLE_TIMEOUT_SECONDS:
                     print(f"[reaper] Expiring session {thread_id} (idle {idle:.0f}s)")

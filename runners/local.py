@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import json
-import os
 import re
 import subprocess
 import uuid
@@ -35,6 +34,14 @@ from core.config import (
     CLAUDE_SETTINGS,
     SDK_ALLOWED_TOOLS,
     SYSTEM_PROMPT,
+)
+from core.agentdb import AgentDBSurface
+from core.providers import settings_for
+from core.reasoning import (
+    build_request_kwargs,
+    classify_outcome,
+    extract_reasoning_content,
+    resolve as resolve_reasoning,
 )
 from runners.base import (
     PlatformConfig, TaskInterrupted, check_blocked,
@@ -183,7 +190,8 @@ def _tool_schema(name: str, description: str, params: dict, required: list[str])
     }
 
 
-_OUTPUT_CAP = 8000
+_OUTPUT_CAP = 8_000  # overridden per-provider in from_env()
+_BASH_TIMEOUT_SECONDS = 120
 
 
 def _resolve(cwd: str, path: str) -> Path:
@@ -197,7 +205,7 @@ def _make_bash(cwd: str) -> Callable[[dict], str]:
         if not cmd:
             return "ERROR: no command provided"
         try:
-            proc = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True, timeout=120)
+            proc = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True, timeout=_BASH_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             return "ERROR: command timed out after 120s"
         except Exception as e:
@@ -413,7 +421,7 @@ class LocalAgentClient:
         can_use_tool: Optional[CanUseTool] = None,
         session_id: Optional[str] = None,
         session_store: Optional[SessionStore] = None,
-        max_tool_iterations: int = 25,
+        max_tool_iterations: int = 25,  # overridden per-provider in from_env()
         context_window: int = 32_768,
         temperature: float = 0.2,
         max_tokens: int = 4096,
@@ -429,6 +437,9 @@ class LocalAgentClient:
         self.max_tokens = max_tokens
         self.summary_chunk_chars = summary_chunk_chars
         self.summary_max_tokens = summary_max_tokens
+        # Reasoning: level is per-thread, set via the /reasoning command.
+        self._thread_id = session_id or ""
+        self._reasoning = None
 
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if api_key:
@@ -573,6 +584,35 @@ class LocalAgentClient:
             except Exception as e:
                 print(f"[agentdb] on_compact callback error: {e}")
 
+    def _reasoning_state(self):
+        """Per-thread reasoning state owned by core.commands (level + verification)."""
+        if self._reasoning is None:
+            import core.commands as _commands
+            self._reasoning = _commands.reasoning_state_for(self._thread_id or "default")
+        return self._reasoning
+
+    def _reasoning_payload(self) -> dict:
+        state = self._reasoning_state()
+        if state.level == "off":
+            return {}
+        resolution = resolve_reasoning("local", self.model)
+        return build_request_kwargs(resolution, state.level, self.model)
+
+    def _record_reasoning(self, data: dict) -> None:
+        state = self._reasoning_state()
+        if state.level == "off":
+            return
+        try:
+            message = data["choices"][0]["message"]
+        except (KeyError, IndexError):
+            return
+        text = extract_reasoning_content(message)
+        state.state, state.detail = classify_outcome(
+            request_failed=False, error_message="", reasoning_text=text,
+        )
+        if text:
+            state.last_reasoning = text
+
     async def _call_local(self) -> dict:
         await self._maybe_compact_history()
         self._trim_history()
@@ -585,9 +625,31 @@ class LocalAgentClient:
         }
         if self.tools:
             payload["tools"] = [t.schema for t in self.tools.values()]
-        response = await self._http.post("/chat/completions", json=payload)
-        response.raise_for_status()
-        return response.json()
+        payload.update(self._reasoning_payload())
+        try:
+            response = await self._http.post("/chat/completions", json=payload)
+            response.raise_for_status()
+        except Exception as exc:
+            state = self._reasoning_state()
+            if state.level != "off":
+                body = ""
+                resp = getattr(exc, "response", None)
+                if resp is not None:
+                    try:
+                        body = resp.text[:400]
+                    except Exception:
+                        body = ""
+                state.state, state.detail = classify_outcome(
+                    request_failed=True,
+                    error_message=f"{exc} {body}".strip(),
+                    reasoning_text="",
+                )
+                if state.state == "rejected":
+                    state.level = "off"
+            raise
+        data = response.json()
+        self._record_reasoning(data)
+        return data
 
     @property
     def _max_tool_result_chars(self) -> int:
@@ -857,25 +919,26 @@ class LocalRunner:
         self._interrupt_requested: set[str] = set()
         self._agentdb_middleware = None
         self._agentdb = None
+        self._agentdb_api = AgentDBSurface()
         self._agent_id: str = "agent"
         self._turn_counters: dict[str, int] = {}
         self._session_workspace_paths: dict[str, str] = {}
 
     @classmethod
     def from_env(cls, name: str) -> "LocalRunner":
-        """Build a LocalRunner from env vars with the given prefix (e.g. 'ollama' → OLLAMA_*)."""
-        prefix = name.upper()
+        """Build a LocalRunner from the provider spec (e.g. 'ollama' -> OLLAMA_*)."""
+        settings = settings_for(name.lower())
         return cls(
-            name=name,
-            base_url=os.environ.get(f"{prefix}_BASE_URL", ""),
-            model=os.environ.get(f"{prefix}_MODEL", ""),
-            api_key=os.environ.get(f"{prefix}_API_KEY", "local"),
-            summary_model=os.environ.get(f"{prefix}_SUMMARY_MODEL", ""),
-            context_window=int(os.environ.get(f"{prefix}_CONTEXT_WINDOW", "32768")),
-            temperature=float(os.environ.get(f"{prefix}_TEMPERATURE", "0.2")),
-            max_tokens=int(os.environ.get(f"{prefix}_MAX_TOKENS", "4096")),
-            summary_chunk_chars=int(os.environ.get("LOCAL_SUMMARY_CHUNK_CHARS", "20000")),
-            summary_max_tokens=2048,
+            name=settings.name,
+            base_url=settings.base_url or "",
+            model=settings.model or "",
+            api_key=settings.api_key or "local",
+            summary_model=settings.summary_model or "",
+            context_window=settings.context_window or 32_768,
+            temperature=settings.temperature if settings.temperature is not None else 0.2,
+            max_tokens=settings.max_tokens or 4096,
+            summary_chunk_chars=settings.summary_chunk_chars,
+            summary_max_tokens=settings.summary_max_tokens or 2048,
         )
 
     def set_model(self, value: str | None) -> str:
@@ -900,33 +963,23 @@ class LocalRunner:
         self._agentdb_middleware = AgentDBMiddleware(
             db=db, agent_id=platform.agent_id, capabilities=LOCAL_CAPABILITIES
         )
+        self._agentdb_api.bind(self._agentdb_middleware, platform.agent_id)
 
+    # --- AgentDB shared surfaces (see core/agentdb.py) -------------------
     def list_pending_conflicts(self) -> list:
-        if self._agentdb_middleware is None:
-            raise RuntimeError("AgentDB not initialized — call init_agentdb first")
-        return self._agentdb_middleware.pending_conflicts()
+        return self._agentdb_api.list_pending_conflicts()
 
     def list_pending_proposals(self, status: str = "pending") -> list[dict]:
-        if self._agentdb_middleware is None:
-            raise RuntimeError("AgentDB not initialized — call init_agentdb first")
-        return self._agentdb_middleware.list_proposals(status=status)
+        return self._agentdb_api.list_pending_proposals(status=status)
 
     def propose_skill(self, name: str, content: str) -> str:
-        if self._agentdb_middleware is None:
-            raise RuntimeError("AgentDB not initialized — call init_agentdb first")
-        return self._agentdb_middleware.propose_skill(
-            name=name, content=content, scope=[self._agent_id]
-        )
+        return self._agentdb_api.propose_skill(name=name, content=content)
 
     def approve_skill_proposal(self, proposal_id: str) -> None:
-        if self._agentdb_middleware is None:
-            raise RuntimeError("AgentDB not initialized — call init_agentdb first")
-        self._agentdb_middleware.approve_proposal(proposal_id)
+        self._agentdb_api.approve_proposal(proposal_id)
 
     def reject_skill_proposal(self, proposal_id: str, reason=None) -> None:
-        if self._agentdb_middleware is None:
-            raise RuntimeError("AgentDB not initialized — call init_agentdb first")
-        self._agentdb_middleware.reject_proposal(proposal_id, reason=reason)
+        self._agentdb_api.reject_proposal(proposal_id, reason=reason)
 
     async def cancel(self, thread_id: str) -> bool:
         task = self._current_tasks.get(thread_id)

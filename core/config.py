@@ -61,34 +61,13 @@ ADMIN_WHATSAPP_USER_IDS = set(
 )
 
 # -------------------------
-# RUNNER — Fireworks
+# RUNNERS (open-model providers)
 # -------------------------
-FIREWORKS_API_KEY = os.environ.get("FIREWORKS_API_KEY", "")
-FIREWORKS_MODEL = os.environ.get("FIREWORKS_MODEL", "")
-FIREWORKS_TEMPERATURE = float(os.environ.get("FIREWORKS_TEMPERATURE", "0.2"))
-FIREWORKS_MAX_TOKENS = int(os.environ.get("FIREWORKS_MAX_TOKENS", "4096"))
-
-# -------------------------
-# RUNNER — Ollama
-# -------------------------
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "")
-OLLAMA_API_KEY = os.environ.get("OLLAMA_API_KEY", "")
-OLLAMA_CONTEXT_WINDOW = int(os.environ.get("OLLAMA_CONTEXT_WINDOW", "32768"))
-OLLAMA_TEMPERATURE = float(os.environ.get("OLLAMA_TEMPERATURE", "0.2"))
-OLLAMA_MAX_TOKENS = int(os.environ.get("OLLAMA_MAX_TOKENS", "4096"))
-OLLAMA_SUMMARY_MODEL = os.environ.get("OLLAMA_SUMMARY_MODEL", "")
-
-# -------------------------
-# RUNNER — MLX / second local server
-# -------------------------
-MLX_BASE_URL = os.environ.get("MLX_BASE_URL", "http://localhost:8081/v1")
-MLX_MODEL = os.environ.get("MLX_MODEL", "")
-MLX_API_KEY = os.environ.get("MLX_API_KEY", "")
-MLX_CONTEXT_WINDOW = int(os.environ.get("MLX_CONTEXT_WINDOW", "32768"))
-MLX_TEMPERATURE = float(os.environ.get("MLX_TEMPERATURE", "0.2"))
-MLX_MAX_TOKENS = int(os.environ.get("MLX_MAX_TOKENS", "4096"))
-MLX_SUMMARY_MODEL = os.environ.get("MLX_SUMMARY_MODEL", "")
+# Provider configuration lives in core/providers.py (single source of truth).
+# Use `from core.providers import settings_for` and call settings_for("<provider>").
+# Claude is different by design: no credential, no base URL and no sampling knobs.
+# Its settings (CLAUDE_SETTINGS / SDK_ALLOWED_TOOLS / SYSTEM_PROMPT) stay below
+# and in runners/claude_reasoning.py, deliberately separate from provider specs.
 
 # -------------------------
 # AGENTDB (optional — disabled by default)

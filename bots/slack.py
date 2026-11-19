@@ -57,6 +57,11 @@ def make_platform() -> tuple[PlatformConfig, SessionStore]:
 # Runner selection — returns a class-based runner instance
 # ---------------------------------------------------------------------------
 
+# Set in main() so the /reasoning command can report backend + model.
+REASONING_BACKEND: str = "claude"
+REASONING_MODEL: str = ""
+
+
 async def select_runner(backend: str, model: str | None = None):
     if backend in ("ollama", "mlx", "local"):
         from runners.local import LocalRunner
@@ -230,52 +235,20 @@ def _register_handlers(platform: PlatformConfig):
 
         runner = commands._require_runner()
 
-        if clean_text.lower() == "cancel":
-            await _post(channel, thread_id, await commands.cancel_reply(thread_id))
-            return
-
-        if clean_text.lower() == "stop session":
-            reply = await commands.stop_session_reply(thread_id, store)
-            await _post(channel, thread_id, reply)
-            return
-
-        if clean_text.lower() == "session status":
-            reply = await commands.session_status_reply(thread_id, store)
-            await _post(channel, thread_id, reply)
-            return
-
-        if clean_text.lower() == "conflicts":
-            await _post(channel, thread_id, await commands.conflicts_reply())
-            return
-
-        if clean_text.lower() == "proposals":
-            await _post(channel, thread_id, await commands.proposals_reply())
-            return
-
-        if clean_text.lower().startswith("propose "):
-            reply = await commands.propose_reply(clean_text[len("propose "):])
-            await _post(channel, thread_id, reply)
-            return
-
-        if clean_text.lower().startswith("approve "):
-            is_admin = commands.is_admin(platform, user_id)
-            reply = await commands.approve_reply(clean_text[len("approve "):], is_admin=is_admin)
-            await _post(channel, thread_id, reply)
-            return
-
-        if clean_text.lower().startswith("reject "):
-            is_admin = commands.is_admin(platform, user_id)
-            reply = await commands.reject_reply(clean_text[len("reject "):], is_admin=is_admin)
-            await _post(channel, thread_id, reply)
-            return
-
-        if clean_text.lower().startswith("autoapprove "):
-            is_admin = commands.is_admin(platform, user_id)
-            reply = await commands.autoapprove_reply(
-                thread_id, clean_text[len("autoapprove "):], is_admin=is_admin,
-                user_id=user_id, session_store=store,
-            )
-            await _post(channel, thread_id, reply)
+        # Commands are defined once in core.commands.COMMANDS; Slack only
+        # adapts its event into a CommandContext. Unmatched text falls through
+        # to the normal agent turn below.
+        command_ctx = commands.CommandContext(
+            platform=platform,
+            thread_id=thread_id,
+            user_id=user_id,
+            backend=REASONING_BACKEND,
+            model_id=REASONING_MODEL,
+            session_store=store,
+        )
+        command_reply = await commands.dispatch(clean_text, command_ctx)
+        if command_reply is not None:
+            await _post(channel, thread_id, command_reply)
             return
 
         # File attachments — download images/PDFs to workspace (Claude backend only)
@@ -341,7 +314,7 @@ def _register_handlers(platform: PlatformConfig):
 # ---------------------------------------------------------------------------
 
 async def main(backend: str = "claude", model: str | None = None):
-    global app
+    global app, REASONING_BACKEND, REASONING_MODEL
 
     bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
     if not bot_token:
@@ -354,6 +327,8 @@ async def main(backend: str = "claude", model: str | None = None):
     platform, store = make_platform()
     runner = await select_runner(backend, model)
     commands.use_runner(runner)
+    REASONING_BACKEND = backend or "claude"
+    REASONING_MODEL = model or getattr(runner, "model", "") or ""
     _register_handlers(platform)
 
     print(f"[startup] Backend: {backend}")

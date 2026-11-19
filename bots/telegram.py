@@ -35,6 +35,10 @@ from runners.base import PlatformConfig, TaskInterrupted, check_blocked
 # ---------------------------------------------------------------------------
 telegram_store: SessionStore = None
 TELEGRAM_PLATFORM: PlatformConfig = None
+
+# Set in main() so the /reasoning command can report backend + model.
+REASONING_BACKEND: str = "claude"
+REASONING_MODEL: str = ""
 BOT_AGENT_ID: str = "telegram_assistant"
 
 _BOT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -352,80 +356,28 @@ async def _command_allowed(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return True
 
 
-async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Single entry point for every registered command.
+
+    Command names live in core.commands.COMMANDS; this handler only adapts
+    Telegram's Update/context into a CommandContext and sends the reply.
+    """
     if not await _command_allowed(update, context):
         return
-    thread_id = str(update.effective_chat.id)
-    reply = await commands.stop_session_reply(thread_id, telegram_store)
-    await _post(context, update.effective_chat.id, reply)
-
-
-async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await _command_allowed(update, context):
+    if update.effective_chat is None:
         return
-    thread_id = str(update.effective_chat.id)
-    reply = await commands.session_status_reply(thread_id, telegram_store)
-    await _post(context, update.effective_chat.id, reply)
-
-
-async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await _command_allowed(update, context):
-        return
-    thread_id = str(update.effective_chat.id)
-    reply = await commands.cancel_reply(thread_id)
-    await _post(context, update.effective_chat.id, reply)
-
-
-async def cmd_conflicts(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await _command_allowed(update, context):
-        return
-    reply = await commands.conflicts_reply()
-    await _post(context, update.effective_chat.id, reply)
-
-
-async def cmd_proposals(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await _command_allowed(update, context):
-        return
-    reply = await commands.proposals_reply()
-    await _post(context, update.effective_chat.id, reply)
-
-
-async def cmd_propose(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await _command_allowed(update, context):
-        return
-    reply = await commands.propose_reply(" ".join(context.args))
-    await _post(context, update.effective_chat.id, reply)
-
-
-async def cmd_approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await _command_allowed(update, context):
-        return
-    user_id = str(update.effective_user.id) if update.effective_user else None
-    is_admin = commands.is_admin(TELEGRAM_PLATFORM, user_id)
-    reply = await commands.approve_reply(" ".join(context.args), is_admin=is_admin)
-    await _post(context, update.effective_chat.id, reply)
-
-
-async def cmd_reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await _command_allowed(update, context):
-        return
-    user_id = str(update.effective_user.id) if update.effective_user else None
-    is_admin = commands.is_admin(TELEGRAM_PLATFORM, user_id)
-    reply = await commands.reject_reply(" ".join(context.args), is_admin=is_admin)
-    await _post(context, update.effective_chat.id, reply)
-
-
-async def cmd_autoapprove(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await _command_allowed(update, context):
-        return
-    thread_id = str(update.effective_chat.id)
-    user_id = str(update.effective_user.id) if update.effective_user else None
-    is_admin = commands.is_admin(TELEGRAM_PLATFORM, user_id)
-    reply = await commands.autoapprove_reply(
-        thread_id, " ".join(context.args), is_admin=is_admin,
-        user_id=user_id, session_store=TELEGRAM_PLATFORM.session_store,
+    text = update.message.text if update.message and update.message.text else ""
+    ctx = commands.CommandContext(
+        platform=TELEGRAM_PLATFORM,
+        thread_id=str(update.effective_chat.id),
+        user_id=str(update.effective_user.id) if update.effective_user else None,
+        backend=REASONING_BACKEND,
+        model_id=REASONING_MODEL,
+        session_store=telegram_store,
     )
-    await _post(context, update.effective_chat.id, reply)
+    reply = await commands.dispatch(text, ctx)
+    if reply is not None:
+        await _post(context, update.effective_chat.id, reply)
 
 
 # ---------------------------------------------------------------------------
@@ -436,6 +388,10 @@ async def main(backend: str = "claude", model: str | None = None, bot_name: str 
     token = configure_bot(bot_name)
     runner = await select_runner(backend, model)
     commands.use_runner(runner)
+
+    global REASONING_BACKEND, REASONING_MODEL
+    REASONING_BACKEND = backend or "claude"
+    REASONING_MODEL = model or getattr(runner, "model", "") or ""
 
     print(f"[startup] Backend: {backend}")
     if bot_name:
@@ -474,15 +430,14 @@ async def main(backend: str = "claude", model: str | None = None, bot_name: str 
     print(f"[startup] Approval timeout: {config.APPROVAL_TIMEOUT_SECONDS}s")
 
     application = Application.builder().token(token).concurrent_updates(True).build()
-    application.add_handler(CommandHandler("stop", cmd_stop, filters=filters.ChatType.PRIVATE))
-    application.add_handler(CommandHandler("status", cmd_status, filters=filters.ChatType.PRIVATE))
-    application.add_handler(CommandHandler("cancel", cmd_cancel, filters=filters.ChatType.PRIVATE))
-    application.add_handler(CommandHandler("conflicts", cmd_conflicts, filters=filters.ChatType.PRIVATE))
-    application.add_handler(CommandHandler("proposals", cmd_proposals, filters=filters.ChatType.PRIVATE))
-    application.add_handler(CommandHandler("propose", cmd_propose, filters=filters.ChatType.PRIVATE))
-    application.add_handler(CommandHandler("approve", cmd_approve, filters=filters.ChatType.PRIVATE))
-    application.add_handler(CommandHandler("reject", cmd_reject, filters=filters.ChatType.PRIVATE))
-    application.add_handler(CommandHandler("autoapprove", cmd_autoapprove, filters=filters.ChatType.PRIVATE))
+    # One handler for every command; the registry defines the names.
+    application.add_handler(
+        CommandHandler(
+            [spec.name for spec in commands.COMMANDS],
+            handle_command,
+            filters=filters.ChatType.PRIVATE,
+        )
+    )
     application.add_handler(
         MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, handle_message)
     )

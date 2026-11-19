@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import json
-import os
 import re
 import subprocess
 import uuid
@@ -37,6 +36,14 @@ from core.config import (
     SDK_ALLOWED_TOOLS,
     SYSTEM_PROMPT,
 )
+from core.agentdb import AgentDBSurface
+from core.providers import settings_for
+from core.reasoning import (
+    build_request_kwargs,
+    classify_outcome,
+    extract_reasoning_content,
+    resolve as resolve_reasoning,
+)
 from runners.base import (
     PlatformConfig, TaskInterrupted, check_blocked,
     _describe_ask_user_question, _resolve_ask_user_answer, _describe_tool_call,
@@ -57,8 +64,11 @@ class ModelSpec:
 DEFAULT_MODEL_NAME = "minimax-m3"
 DEFAULT_CONTEXT_WINDOW = 512_000
 
-TEMPERATURE = float(os.environ.get("FIREWORKS_TEMPERATURE", "0.2"))
-MAX_TOKENS = int(os.environ.get("FIREWORKS_MAX_TOKENS", "4096"))
+# All provider configuration comes from core.providers (single source of truth).
+_SETTINGS = settings_for("fireworks")
+
+TEMPERATURE = _SETTINGS.temperature if _SETTINGS.temperature is not None else 0.2
+MAX_TOKENS = _SETTINGS.max_tokens if _SETTINGS.max_tokens is not None else 4096
 
 
 def _parse_full_model_id(model_id: str) -> tuple[str, str] | None:
@@ -98,12 +108,10 @@ def resolve_model(value: str | None) -> ModelSpec:
 TOKEN_CHAR_RATIO = 3.5
 HISTORY_RESERVE_TOKENS = 2000
 
-SUMMARY_MODEL_ID = os.environ.get(
-    "FIREWORKS_SUMMARY_MODEL", "accounts/fireworks/models/llama-v3p1-8b-instruct"
-)
-SUMMARY_MAX_TOKENS = int(os.environ.get("FIREWORKS_SUMMARY_MAX_TOKENS", "3072"))
-SUMMARY_TEMPERATURE = 0.2
-SUMMARY_CHUNK_CHARS = int(os.environ.get("FIREWORKS_SUMMARY_CHUNK_CHARS", str(20_000)))
+SUMMARY_MODEL_ID = _SETTINGS.summary_model or "accounts/fireworks/models/llama-v3p1-8b-instruct"
+SUMMARY_MAX_TOKENS = _SETTINGS.summary_max_tokens if _SETTINGS.summary_max_tokens is not None else 3072
+SUMMARY_TEMPERATURE = _SETTINGS.summary_temperature if _SETTINGS.summary_temperature is not None else 0.2
+SUMMARY_CHUNK_CHARS = _SETTINGS.summary_chunk_chars
 COMPACT_TRIGGER_RATIO = 0.7
 COMPACT_TARGET_RATIO = 0.5
 
@@ -236,7 +244,8 @@ def _tool_schema(name: str, description: str, params: dict, required: list[str])
     }
 
 
-_OUTPUT_CAP = 8000
+_OUTPUT_CAP = settings_for("fireworks").tool_output_cap
+_BASH_TIMEOUT_SECONDS = settings_for("fireworks").bash_timeout_seconds
 
 
 def _resolve(cwd: str, path: str) -> Path:
@@ -251,10 +260,10 @@ def _make_bash(cwd: str) -> Callable[[dict], str]:
             return "ERROR: no command provided"
         try:
             proc = subprocess.run(
-                cmd, shell=True, cwd=cwd, capture_output=True, text=True, timeout=120,
+                cmd, shell=True, cwd=cwd, capture_output=True, text=True, timeout=_BASH_TIMEOUT_SECONDS,
             )
         except subprocess.TimeoutExpired:
-            return "ERROR: command timed out after 120s"
+            return f"ERROR: command timed out after {_BASH_TIMEOUT_SECONDS}s"
         except Exception as e:
             return f"ERROR: {e}"
         out = proc.stdout or ""
@@ -482,13 +491,13 @@ class FireworksAgentClient:
         can_use_tool: Optional[CanUseTool] = None,
         session_id: Optional[str] = None,
         session_store: Optional[SessionStore] = None,
-        max_tool_iterations: int = 25,
+        max_tool_iterations: int = settings_for("fireworks").max_tool_iterations,
         context_window: int = DEFAULT_CONTEXT_WINDOW,
         on_compact: Optional[Callable[[str], None]] = None,
     ):
         self.model = model
         self.context_window = context_window
-        api_key = api_key or os.environ.get("FIREWORKS_API_KEY")
+        api_key = api_key or settings_for("fireworks").api_key
         if not api_key:
             raise ValueError("Set FIREWORKS_API_KEY or pass api_key=")
         if not _FIREWORKS_AVAILABLE:
@@ -499,6 +508,8 @@ class FireworksAgentClient:
         self.tools = tools if tools is not None else {}
         self.system_prompt = system_prompt
         self.can_use_tool = can_use_tool
+        self._thread_id = session_id or ""
+        self._reasoning = None
         self.session_id = session_id or str(uuid.uuid4())
         self.session_store: SessionStore = session_store or JsonFileSessionStore()
         self.max_tool_iterations = max_tool_iterations
@@ -631,6 +642,34 @@ class FireworksAgentClient:
             except Exception as e:
                 print(f"[agentdb] on_compact callback error: {e}")
 
+    def _reasoning_state(self):
+        if self._reasoning is None:
+            import core.commands as _commands
+            self._reasoning = _commands.reasoning_state_for(self._thread_id or "default")
+        return self._reasoning
+
+    def _reasoning_kwargs(self) -> dict:
+        state = self._reasoning_state()
+        if state.level == "off":
+            return {}
+        resolution = resolve_reasoning("fireworks", self.model)
+        return build_request_kwargs(resolution, state.level, self.model)
+
+    def _record_reasoning(self, data: dict) -> None:
+        state = self._reasoning_state()
+        if state.level == "off":
+            return
+        try:
+            message = data["choices"][0]["message"]
+        except (KeyError, IndexError):
+            return
+        text = extract_reasoning_content(message)
+        state.state, state.detail = classify_outcome(
+            request_failed=False, error_message="", reasoning_text=text,
+        )
+        if text:
+            state.last_reasoning = text
+
     async def _call_fireworks(self) -> dict:
         await self._maybe_compact_history()
         self._trim_history()
@@ -643,8 +682,21 @@ class FireworksAgentClient:
         }
         if self.tools:
             kwargs["tools"] = [t.schema for t in self.tools.values()]
-        completion = await self._client.chat.completions.create(**kwargs)
-        return completion.to_dict()
+        kwargs.update(self._reasoning_kwargs())
+        try:
+            completion = await self._client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            state = self._reasoning_state()
+            if state.level != "off":
+                state.state, state.detail = classify_outcome(
+                    request_failed=True, error_message=str(exc), reasoning_text="",
+                )
+                if state.state == "rejected":
+                    state.level = "off"
+            raise
+        data = completion.to_dict()
+        self._record_reasoning(data)
+        return data
 
     @property
     def _max_tool_result_chars(self) -> int:
@@ -908,7 +960,7 @@ class FireworksRunner:
 
     def __init__(self, model: str | None = None):
         self._model: ModelSpec = resolve_model(
-            model or os.environ.get("FIREWORKS_MODEL")
+            model or settings_for("fireworks").model
         )
         self._clients: dict[str, FireworksAgentClient] = {}
         self._locks: dict[str, asyncio.Lock] = {}
@@ -916,6 +968,7 @@ class FireworksRunner:
         self._interrupt_requested: set[str] = set()
         self._agentdb_middleware = None
         self._agentdb = None
+        self._agentdb_api = AgentDBSurface()
         self._agent_id: str = "agent"
         self._turn_counters: dict[str, int] = {}
         self._session_workspace_paths: dict[str, str] = {}
@@ -923,7 +976,7 @@ class FireworksRunner:
     async def set_model(self, value: str | None) -> ModelSpec:
         """Resolve model and optionally look up its context window from Fireworks."""
         spec = resolve_model(value)
-        api_key = os.environ.get("FIREWORKS_API_KEY")
+        api_key = settings_for("fireworks").api_key
         if api_key and _FIREWORKS_AVAILABLE:
             try:
                 client = AsyncFireworks(api_key=api_key)
@@ -954,41 +1007,31 @@ class FireworksRunner:
             return
         try:
             from agentdb.adapters.middleware import AgentDBMiddleware
-            from agentdb.adapters.capabilities import FIREWORKS_CAPABILITIES
+            from agentdb.adapters.capabilities import SERVERLESS_CAPABILITIES
         except ImportError:
             return
         self._agent_id = platform.agent_id
         self._agentdb = db
         self._agentdb_middleware = AgentDBMiddleware(
-            db=db, agent_id=platform.agent_id, capabilities=FIREWORKS_CAPABILITIES
+            db=db, agent_id=platform.agent_id, capabilities=SERVERLESS_CAPABILITIES
         )
+        self._agentdb_api.bind(self._agentdb_middleware, platform.agent_id)
 
+    # --- AgentDB shared surfaces (see core/agentdb.py) -------------------
     def list_pending_conflicts(self) -> list:
-        if self._agentdb_middleware is None:
-            raise RuntimeError("AgentDB not initialized — call init_agentdb first")
-        return self._agentdb_middleware.pending_conflicts()
+        return self._agentdb_api.list_pending_conflicts()
 
     def list_pending_proposals(self, status: str = "pending") -> list[dict]:
-        if self._agentdb_middleware is None:
-            raise RuntimeError("AgentDB not initialized — call init_agentdb first")
-        return self._agentdb_middleware.list_proposals(status=status)
+        return self._agentdb_api.list_pending_proposals(status=status)
 
     def propose_skill(self, name: str, content: str) -> str:
-        if self._agentdb_middleware is None:
-            raise RuntimeError("AgentDB not initialized — call init_agentdb first")
-        return self._agentdb_middleware.propose_skill(
-            name=name, content=content, scope=[self._agent_id]
-        )
+        return self._agentdb_api.propose_skill(name=name, content=content)
 
     def approve_skill_proposal(self, proposal_id: str) -> None:
-        if self._agentdb_middleware is None:
-            raise RuntimeError("AgentDB not initialized — call init_agentdb first")
-        self._agentdb_middleware.approve_proposal(proposal_id)
+        self._agentdb_api.approve_proposal(proposal_id)
 
     def reject_skill_proposal(self, proposal_id: str, reason=None) -> None:
-        if self._agentdb_middleware is None:
-            raise RuntimeError("AgentDB not initialized — call init_agentdb first")
-        self._agentdb_middleware.reject_proposal(proposal_id, reason=reason)
+        self._agentdb_api.reject_proposal(proposal_id, reason=reason)
 
     async def cancel(self, thread_id: str) -> bool:
         task = self._current_tasks.get(thread_id)
