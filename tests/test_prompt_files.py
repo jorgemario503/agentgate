@@ -122,20 +122,30 @@ def test_shipped_prompt_files_load_cleanly():
     assert "never violate these under any circumstances" in prompt
 
 
-def test_shipped_prompts_never_weaken_the_builtin_rules():
-    """Shipping a hard_rules.md would replace the built-in security text.
+def test_shipped_hard_rules_match_the_builtin_structure():
+    """The shipped hard_rules.md is an active override, so it must be sound.
 
-    The override mechanism is opt-in: prompts/ ships an example base prompt
-    only. If a hard_rules.md ever appears in the shipped directory by accident,
-    the built-in rules would be silently swapped for whatever it contains.
+    Shipping it is deliberate: the rules live in core/config.py in plain sight
+    anyway, and hiding the file only made them harder to find. What matters is
+    that it still states the rule categories the built-in text covers, so the
+    override cannot quietly drop one.
     """
-    from core import prompts as p
+    shipped = Path("prompts") / prompts.HARD_RULES_FILE
+    assert shipped.exists()
+    text = shipped.read_text()
 
-    shipped = Path("prompts")
-    assert not (shipped / p.HARD_RULES_FILE).exists(), (
-        "prompts/hard_rules.md would override the built-in hard rules; "
-        "ship it only as documented example text, not as an active override"
-    )
+    from tests.test_prompt_files import _strip_header
+
+    body = _strip_header(text).lower()
+    for category in (
+        "database tables",
+        "secrets",
+        "git",
+        "where clause",
+        "delete",
+        "directory",
+    ):
+        assert category in body, f"shipped hard rules lost the {category!r} category"
 
 
 def test_builtin_rules_remain_authoritative_without_override(tmp_path, monkeypatch):
@@ -145,3 +155,71 @@ def test_builtin_rules_remain_authoritative_without_override(tmp_path, monkeypat
     prompt = prompts.build_base_prompt()
     assert "Never run DELETE FROM without a WHERE clause" in prompt
     assert "Never expose secrets, credentials, or tokens in output" in prompt
+
+
+# -- section delimiters ----------------------------------------------------
+
+
+def test_sections_use_markdown_headings(tmp_path, monkeypatch):
+    """Each injected section is delimited by a fixed markdown heading."""
+    import json
+
+    monkeypatch.setattr(prompts, "PROMPT_DIR", tmp_path / "none", raising=True)
+    monkeypatch.delenv(prompts.PROMPT_ENV, raising=False)
+    path = tmp_path / "t1.json"
+    path.write_text(json.dumps([{"role": "user", "content": "earlier"}]))
+
+    from core.sessions import SessionState
+
+    built = prompts.build_system_prompt(
+        state=SessionState.COLD, history_path=str(path), workspace_path="/ws"
+    )
+    # `memory` only appears when AgentDB yields content, so it is checked
+    # separately; these three are always present.
+    for key in ("base", "hard_rules", "resume"):
+        assert prompts.SECTION_HEADINGS[key] in built, f"missing heading: {key}"
+    order = [
+        built.index(prompts.SECTION_HEADINGS[k]) for k in ("base", "hard_rules", "resume")
+    ]
+    assert order == sorted(order), "headings are not in stable-to-volatile order"
+
+
+def test_headings_are_not_overridable(prompt_dir):
+    """Operators can edit content; the section headings are structural."""
+    (prompt_dir / "base.md").write_text("CUSTOM TEXT")
+    prompt = prompts.build_base_prompt()
+    assert prompts.SECTION_HEADINGS["base"] in prompt
+    assert "CUSTOM TEXT" in prompt
+
+
+# -- summary prompt lives with the others ----------------------------------
+
+
+def test_summary_prompt_is_centralised():
+    from runners import deepinfra, fireworks, local
+
+    for module in (local, deepinfra, fireworks):
+        assert not hasattr(module, "_SUMMARY_SYSTEM_PROMPT"), (
+            f"{module.__name__} still defines its own summary prompt"
+        )
+    assert prompts.build_summary_prompt()
+
+
+def test_summary_prompt_is_overridable(prompt_dir):
+    (prompt_dir / "summary.md").write_text("CUSTOM SUMMARY INSTRUCTIONS")
+    assert prompts.build_summary_prompt() == "CUSTOM SUMMARY INSTRUCTIONS"
+
+
+def test_summary_prompt_falls_back_when_absent(tmp_path, monkeypatch):
+    monkeypatch.setattr(prompts, "PROMPT_DIR", tmp_path / "nope", raising=True)
+    monkeypatch.delenv(prompts.PROMPT_ENV, raising=False)
+    assert "condensing" in prompts.build_summary_prompt()
+
+
+def _strip_header(text: str) -> str:
+    """Mirror of the loader's comment stripping, for asserting on file bodies."""
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines) and (lines[i].lstrip().startswith("#") or not lines[i].strip()):
+        i += 1
+    return "\n".join(lines[i:]).strip()

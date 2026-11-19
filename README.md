@@ -251,9 +251,39 @@ export AGENTGATE_PROMPTS_DIR=/path/to/my-prompts
 ```
 
 A missing, empty, or unreadable file falls back to the built-in text — an
-override can never blank the prompt. `prompts/` ships an example base prompt
-only. `hard_rules.md` is deliberately **not** shipped: supplying one replaces
-the built-in security instructions wholesale, so it is an opt-in choice.
+override can never blank the prompt. `prompts/` ships `base.md`,
+`hard_rules.md` and `summary.md`; `resume.md` ships as `.example` so only its
+opening text is optional.
+
+Each file documents its own conventions at the top. The short version: leading
+`#` comments are stripped and never reach the model; the section heading is
+added by AgentGate, so do not repeat it in the file; and anything from the
+first non-comment line onward *is* sent.
+
+### Section headings
+
+Sections are delimited by fixed markdown headings, defined once in
+`core/prompts.py` (`SECTION_HEADINGS`) and injected in stable-to-volatile
+order:
+
+| Section | Heading |
+|---|---|
+| base instructions | `## Base instructions` |
+| hard rules | `## Hard rules` |
+| resume block | `## Resuming an existing session` |
+| AgentDB memory | `## Memory from previous sessions` |
+
+The headings are structural, not content: a customised prompt file replaces a
+section's body, never its heading, so the structure cannot be broken by an
+edit. Injection lives in one module — the runners only pass their state in.
+
+### A note on `hard_rules.md`
+
+Shipping it changes the rule text the model sees, so edit it deliberately. It
+is a *prompt*, not an enforcement layer: the real controls are
+`core/approvals.py`, `permissions.yaml` and the blocked-pattern list, which
+stop calls regardless of what the prompt says. The file states this itself so
+nobody mistakes editing it for configuring the guardrails.
 
 ### Prompt cache keys
 

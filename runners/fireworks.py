@@ -111,21 +111,6 @@ SUMMARY_CHUNK_CHARS = _SETTINGS.summary_chunk_chars
 COMPACT_TRIGGER_RATIO = 0.7
 COMPACT_TARGET_RATIO = 0.5
 
-_SUMMARY_SYSTEM_PROMPT = (
-    "You are condensing an earlier portion of an ongoing coding-agent "
-    "conversation so it can be removed from the live context. Preserve "
-    "all information needed to continue the conversation correctly, "
-    "including: user goals and constraints; decisions made and the "
-    "reasoning behind them when it affects future work; concrete facts "
-    "(file paths, function names, class names, APIs, identifiers, URLs, "
-    "numbers, versions, commands, errors, and configuration values); "
-    "code changes already made; remaining tasks, open questions, and "
-    "known issues. Omit routine tool chatter, acknowledgements, repeated "
-    "information, and other conversational filler. Be concise, but do "
-    "not sacrifice important technical detail for brevity. Write plain "
-    "prose with no headings or preamble."
-)
-
 
 def _estimate_tokens(obj: Any) -> int:
     return max(1, int(len(json.dumps(obj)) / TOKEN_CHAR_RATIO))
@@ -588,7 +573,7 @@ class FireworksAgentClient:
                 max_tokens=SUMMARY_MAX_TOKENS,
                 temperature=SUMMARY_TEMPERATURE,
                 messages=[
-                    {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
+                    {"role": "system", "content": build_summary_prompt()},
                     {"role": "user", "content": transcript},
                 ],
             )
@@ -705,7 +690,7 @@ class FireworksAgentClient:
                     max_tokens=max_tok,
                     temperature=SUMMARY_TEMPERATURE,
                     messages=[
-                        {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
+                        {"role": "system", "content": build_summary_prompt()},
                         {"role": "user", "content": (
                             f"Summarize this '{tool_name}' tool output ({label}), "
                             f"preserving all technical details:\n\n{text}"

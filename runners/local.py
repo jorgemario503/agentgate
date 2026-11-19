@@ -60,16 +60,6 @@ SUMMARY_TEMPERATURE = 0.2
 COMPACT_TRIGGER_RATIO = 0.7
 COMPACT_TARGET_RATIO = 0.5
 
-_SUMMARY_SYSTEM_PROMPT = (
-    "You are condensing an earlier portion of an ongoing coding-agent "
-    "conversation so it can be removed from the live context. Preserve "
-    "all information needed to continue the conversation correctly: user "
-    "goals, decisions and reasoning, concrete facts (file paths, function "
-    "names, APIs, numbers, commands, errors), code changes made, remaining "
-    "tasks, and open questions. Omit routine chatter and repeated info. "
-    "Write plain prose, no headings."
-)
-
 import re as _re
 
 
@@ -546,7 +536,7 @@ class LocalAgentClient:
 
         transcript = _render_turns_for_summary(to_compact)
         summary = await self._summarize([
-            {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
+            {"role": "system", "content": build_summary_prompt()},
             {"role": "user", "content": transcript},
         ], self.summary_max_tokens)
         if not summary:
@@ -655,7 +645,7 @@ class LocalAgentClient:
 
         async def _do(text: str, label: str) -> str:
             return await self._summarize([
-                {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
+                {"role": "system", "content": build_summary_prompt()},
                 {"role": "user", "content": f"Summarize this '{tool_name}' output ({label}), preserving all technical details:\n\n{text}"},
             ], per_chunk_tokens)
 
@@ -666,7 +656,7 @@ class LocalAgentClient:
         combined = "\n\n".join(valid)
         if len(combined) > cap:
             final = await self._summarize([
-                {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
+                {"role": "system", "content": build_summary_prompt()},
                 {"role": "user", "content": combined[:chunk_size]},
             ], self.summary_max_tokens)
             return final or combined[:cap] + "\n...[truncated]"

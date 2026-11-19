@@ -49,6 +49,38 @@ PROMPT_ENV = "AGENTGATE_PROMPTS_DIR"
 BASE_FILE = "base.md"
 HARD_RULES_FILE = "hard_rules.md"
 RESUME_FILE = "resume.md"
+SUMMARY_FILE = "summary.md"
+
+#: Fixed section headings. These are structural, not content: they delimit
+#: each injected section so the model can tell them apart, and code (and the
+#: tests) rely on them. Operators override the *text* of a section, never its
+#: heading.
+SECTION_HEADINGS = {
+    "base": "## Base instructions",
+    "hard_rules": "## Hard rules",
+    "resume": "## Resuming an existing session",
+    "memory": "## Memory from previous sessions",
+    "summary": "## Summarisation instructions",
+}
+
+#: Built-in summariser prompt. This governs the compaction summary, not the
+#: agent, so it carries no security guarantee and is safe to ship as an
+#: active default. The three runners used to carry their own copies and had
+#: already drifted apart.
+SUMMARY_PROMPT = (
+    "You are condensing an earlier portion of an ongoing coding-agent "
+    "conversation so it can be removed from the live context. Preserve "
+    "all information needed to continue the conversation correctly, "
+    "including: user goals and constraints; decisions made and the "
+    "reasoning behind them when it affects future work; concrete facts "
+    "(file paths, function names, class names, APIs, identifiers, URLs, "
+    "numbers, versions, commands, errors, and configuration values); "
+    "code changes already made; remaining tasks, open questions, and known "
+    "issues. Omit routine tool chatter, acknowledgements, repeated "
+    "information, and other conversational filler. Be concise, but do not "
+    "sacrifice important technical detail for brevity. Write plain prose "
+    "with no headings or preamble."
+)
 
 #: How many trailing turns the resume block replays inline.
 RESUME_TAIL_TURNS = 2
@@ -102,15 +134,30 @@ def _section(filename: str, builtin: str) -> str:
     return _override(filename) or builtin
 
 
-def build_base_prompt() -> str:
-    """Layers 1+2: the workflow prompt plus AgentGate's hard rules.
+def _heading(key: str) -> str:
+    return SECTION_HEADINGS[key]
 
-    Each layer can be overridden by a file in `PROMPT_DIR`; a missing, empty,
-    or unreadable file falls back to the built-in text.
+
+def build_base_prompt() -> str:
+    """The base instructions and hard rules, each under a fixed heading.
+
+    The heading is added by this function, not stored in the override file, so
+    a customised file cannot break the section structure. The *content* of each
+    section can be overridden via `PROMPT_DIR`; a missing, empty, or unreadable
+    file falls back to the built-in text.
     """
     base = _section(BASE_FILE, BASE_SYSTEM_PROMPT)
     rules = _section(HARD_RULES_FILE, SYSTEM_PROMPT)
-    return f"{base}\n\n{rules}"
+    return f"{_heading('base')}\n{base}\n\n{_heading('hard_rules')}\n{rules}"
+
+
+def build_summary_prompt() -> str:
+    """Instructions for the compaction summariser.
+
+    Centralised here with the other prompt surfaces; the three runners used to
+    keep drifting copies. Overridable like the rest.
+    """
+    return _section(SUMMARY_FILE, SUMMARY_PROMPT)
 
 
 def _load_messages(history_path: str) -> list[dict]:
@@ -185,14 +232,13 @@ def build_resume_block(
     Never raises. If the history cannot be read, the path is still named so the
     model can fetch it.
     """
-    intro = _section(
+    intro_body = _section(
         RESUME_FILE,
-        "## Resuming an existing session\n"
         "You are continuing a conversation that started earlier. Do not greet the\n"
         "user or re-introduce yourself.",
     )
     header = [
-        intro,
+        f"{_heading('resume')}\n{intro_body}",
         "",
         f"- Workspace: {workspace_path}",
         f"- Full conversation history: {history_path}",
@@ -260,7 +306,7 @@ def build_agentdb_block(
     parts = [p for p in parts if p]
     if not parts:
         return ""
-    return "## Memory from previous sessions\n" + "\n\n".join(parts)
+    return f"{_heading('memory')}\n" + "\n\n".join(parts)
 
 
 def apply_system_prompt(messages: list[dict], system_prompt: Optional[str]) -> list[dict]:
