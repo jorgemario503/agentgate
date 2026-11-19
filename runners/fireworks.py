@@ -3,7 +3,8 @@ Fireworks runner — OpenAI-compatible chat-completions endpoint.
 
 No `claude` binary required. Bring your own FIREWORKS_API_KEY.
 
-Requires: pip install "fireworks-ai>=1.2.0"
+Rides on the `openai` package with a Fireworks base_url, so no vendor SDK is
+needed — this runner works from the base requirements.
 """
 from __future__ import annotations
 
@@ -18,14 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
-try:
-    import fireworks
-    from fireworks import AsyncFireworks
-    _FIREWORKS_AVAILABLE = True
-except ImportError:
-    _FIREWORKS_AVAILABLE = False
-    fireworks = None  # type: ignore
-    AsyncFireworks = None  # type: ignore
+from openai import AsyncOpenAI
 
 import core.approvals as approvals
 from core.config import (
@@ -34,9 +28,16 @@ from core.config import (
     BLOCKED_PATTERNS,
     CLAUDE_SETTINGS,
     SDK_ALLOWED_TOOLS,
-    SYSTEM_PROMPT,
 )
 from core.agentdb import AgentDBSurface
+from core.cache_key import cache_key_kwargs, retry_without_cache_key
+from core.history import JsonFileHistoryStore
+from core.prompts import (
+    apply_system_prompt,
+    build_summary_prompt,
+    build_system_prompt,
+)
+from core.sessions import classify_session
 from core.providers import settings_for
 from core.reasoning import (
     build_request_kwargs,
@@ -115,21 +116,6 @@ SUMMARY_CHUNK_CHARS = _SETTINGS.summary_chunk_chars
 COMPACT_TRIGGER_RATIO = 0.7
 COMPACT_TARGET_RATIO = 0.5
 
-_SUMMARY_SYSTEM_PROMPT = (
-    "You are condensing an earlier portion of an ongoing coding-agent "
-    "conversation so it can be removed from the live context. Preserve "
-    "all information needed to continue the conversation correctly, "
-    "including: user goals and constraints; decisions made and the "
-    "reasoning behind them when it affects future work; concrete facts "
-    "(file paths, function names, class names, APIs, identifiers, URLs, "
-    "numbers, versions, commands, errors, and configuration values); "
-    "code changes already made; remaining tasks, open questions, and "
-    "known issues. Omit routine tool chatter, acknowledgements, repeated "
-    "information, and other conversational filler. Be concise, but do "
-    "not sacrifice important technical detail for brevity. Write plain "
-    "prose with no headings or preamble."
-)
-
 
 def _estimate_tokens(obj: Any) -> int:
     return max(1, int(len(json.dumps(obj)) / TOKEN_CHAR_RATIO))
@@ -167,22 +153,11 @@ class SessionStore(ABC):
     def save(self, session_id: str, messages: list[dict]) -> None: ...
 
 
-class JsonFileSessionStore(SessionStore):
+class JsonFileSessionStore(JsonFileHistoryStore, SessionStore):
+    """Persisted message history for one runner (see core.history)."""
+
     def __init__(self, directory: str | Path = "./fw_sessions"):
-        self.directory = Path(directory)
-
-    def _path(self, session_id: str) -> Path:
-        self.directory.mkdir(parents=True, exist_ok=True)
-        return self.directory / f"{session_id}.json"
-
-    def load(self, session_id: str) -> list[dict]:
-        path = self._path(session_id)
-        if path.exists():
-            return json.loads(path.read_text())
-        return []
-
-    def save(self, session_id: str, messages: list[dict]) -> None:
-        self._path(session_id).write_text(json.dumps(messages, indent=2))
+        JsonFileHistoryStore.__init__(self, directory=directory)
 
 
 # ---------------------------------------------------------------------------
@@ -462,15 +437,6 @@ def permission_decision(tool_name: str, input_data: dict) -> str:
 
 CanUseTool = Callable[[str, dict], Awaitable[Any]]
 
-_BASE_SYSTEM_PROMPT = (
-    "You are a coding assistant operating in a local workspace via tools. "
-    "Available tools: Bash (shell), Read, Write, Edit, Glob, Grep, and "
-    "lookup_directory / remember_directory. Prefer Read/Glob/Grep for inspection "
-    "and Edit for surgical changes; use Bash for everything else. When you refer to "
-    "a directory by name, call lookup_directory first before searching."
-)
-
-
 def _safe_json_args(raw: Optional[str]) -> dict:
     if not raw:
         return {}
@@ -500,11 +466,11 @@ class FireworksAgentClient:
         api_key = api_key or settings_for("fireworks").api_key
         if not api_key:
             raise ValueError("Set FIREWORKS_API_KEY or pass api_key=")
-        if not _FIREWORKS_AVAILABLE:
-            raise RuntimeError(
-                "fireworks-ai is not installed — pip install 'fireworks-ai>=1.2.0'"
-            )
-        self._client = AsyncFireworks(api_key=api_key)
+        settings = settings_for("fireworks")
+        self._client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=settings.base_url or "https://api.fireworks.ai/inference/v1",
+        )
         self.tools = tools if tools is not None else {}
         self.system_prompt = system_prompt
         self.can_use_tool = can_use_tool
@@ -518,9 +484,9 @@ class FireworksAgentClient:
         self.on_compact = on_compact
 
     async def connect(self) -> None:
-        self.messages = self.session_store.load(self.session_id)
-        if self.system_prompt and not any(m.get("role") == "system" for m in self.messages):
-            self.messages.insert(0, {"role": "system", "content": self.system_prompt})
+        self.messages = apply_system_prompt(
+            self.session_store.load(self.session_id), self.system_prompt
+        )
 
     async def query(self, prompt: str, ephemeral_context: Optional[str] = None) -> None:
         self.messages.append({"role": "user", "content": prompt})
@@ -612,7 +578,7 @@ class FireworksAgentClient:
                 max_tokens=SUMMARY_MAX_TOKENS,
                 temperature=SUMMARY_TEMPERATURE,
                 messages=[
-                    {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
+                    {"role": "system", "content": build_summary_prompt()},
                     {"role": "user", "content": transcript},
                 ],
             )
@@ -683,8 +649,17 @@ class FireworksAgentClient:
         if self.tools:
             kwargs["tools"] = [t.schema for t in self.tools.values()]
         kwargs.update(self._reasoning_kwargs())
+        cache_kwargs = cache_key_kwargs("fireworks", self.session_id)
         try:
-            completion = await self._client.chat.completions.create(**kwargs)
+            try:
+                completion = await self._client.chat.completions.create(
+                    **kwargs, **cache_kwargs
+                )
+            except Exception as exc:
+                # A server that rejects the cache key must not cost the turn.
+                if not cache_kwargs or not retry_without_cache_key(exc):
+                    raise
+                completion = await self._client.chat.completions.create(**kwargs)
         except Exception as exc:
             state = self._reasoning_state()
             if state.level != "off":
@@ -720,7 +695,7 @@ class FireworksAgentClient:
                     max_tokens=max_tok,
                     temperature=SUMMARY_TEMPERATURE,
                     messages=[
-                        {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
+                        {"role": "system", "content": build_summary_prompt()},
                         {"role": "user", "content": (
                             f"Summarize this '{tool_name}' tool output ({label}), "
                             f"preserving all technical details:\n\n{text}"
@@ -755,19 +730,21 @@ class FireworksAgentClient:
             try:
                 data = await self._call_fireworks()
             except Exception as e:
-                if _FIREWORKS_AVAILABLE and fireworks is not None:
-                    for exc_type in (
-                        fireworks.RateLimitError,
-                        fireworks.AuthenticationError,
-                        fireworks.APIStatusError,
-                        fireworks.APIConnectionError,
-                    ):
-                        if isinstance(e, exc_type):
-                            yield ResultMessage(
-                                session_id=self.session_id, is_error=True,
-                                result=f"Fireworks API error: {e}",
-                            )
-                            return
+                from openai import (
+                    APIConnectionError,
+                    APIStatusError,
+                    AuthenticationError,
+                    RateLimitError,
+                )
+
+                if isinstance(
+                    e, (RateLimitError, AuthenticationError, APIStatusError, APIConnectionError)
+                ):
+                    yield ResultMessage(
+                        session_id=self.session_id, is_error=True,
+                        result=f"Fireworks API error: {e}",
+                    )
+                    return
                 yield ResultMessage(
                     session_id=self.session_id, is_error=True,
                     result=f"Fireworks error: {e}",
@@ -958,6 +935,9 @@ def _make_permission_callback(
 class FireworksRunner:
     """Class-based Fireworks runner. One instance per bot process."""
 
+    #: Name used for the history directory and log prefixes.
+    name = "fireworks"
+
     def __init__(self, model: str | None = None):
         self._model: ModelSpec = resolve_model(
             model or settings_for("fireworks").model
@@ -977,24 +957,31 @@ class FireworksRunner:
         """Resolve model and optionally look up its context window from Fireworks."""
         spec = resolve_model(value)
         api_key = settings_for("fireworks").api_key
-        if api_key and _FIREWORKS_AVAILABLE:
+        if api_key:
+            # Best-effort catalog lookup over the same OpenAI-compatible client,
+            # so no second SDK is needed. Any failure keeps the fallback window,
+            # except a definitive "not found", which is worth telling the user.
             try:
-                client = AsyncFireworks(api_key=api_key)
                 parsed = _parse_full_model_id(spec.model_id)
                 account_id, name = parsed if parsed else ("fireworks", spec.model_id)
-                try:
-                    model = await client.models.get(name, account_id=account_id)
-                except fireworks.NotFoundError:
-                    model = None
-                await client.close()
-                context_length = getattr(model, "context_length", None) if model else None
+                async with AsyncOpenAI(
+                    api_key=api_key,
+                    base_url=settings_for("fireworks").base_url
+                    or "https://api.fireworks.ai/inference/v1",
+                ) as client:
+                    model = await client.models.retrieve(
+                        name, extra_query={"account_id": account_id}
+                    )
+                context_length = getattr(model, "context_length", None)
                 if context_length:
                     spec = ModelSpec(spec.name, spec.model_id, context_length)
-                elif model is None:
-                    print(f"[fireworks] warning: '{spec.model_id}' not found in catalog")
             except Exception as e:
-                print(f"[fireworks] warning: could not confirm context window for "
-                      f"'{spec.model_id}' ({e}); using fallback {spec.context_window}")
+                status = getattr(e, "status_code", None)
+                if status == 404:
+                    print(f"[fireworks] warning: '{spec.model_id}' not found in catalog")
+                else:
+                    print(f"[fireworks] warning: could not confirm context window for "
+                          f"'{spec.model_id}' ({e}); using fallback {spec.context_window}")
         self._model = spec
         return self._model
 
@@ -1076,32 +1063,18 @@ class FireworksRunner:
             return self._clients[thread_id]
 
         store = platform.session_store
-        history_store = JsonFileSessionStore(directory=f"{store.base}/fw_history")
-        system_prompt = f"{_BASE_SYSTEM_PROMPT}\n\n{SYSTEM_PROMPT}"
-
-        # Local models can't call agentdb tools mid-turn, so pre-load memory
-        # records from previous sessions into the system prompt at session start.
-        # Use prepare_turn (not async) to get only memory records — skills,
-        # workspace, and work context are injected fresh each turn via ephemeral_context.
-        if self._agentdb_middleware is not None:
-            try:
-                init_messages, _ = self._agentdb_middleware.prepare_turn(
-                    user_query="",
-                    session_id=thread_id,
-                    working_dirs=[workspace_path] + list(ADDITIONAL_DIRS),
-                )
-                init_parts = [
-                    m["content"] for m in init_messages
-                    if m.get("role") in ("system", "user") and m.get("content", "").strip()
-                ]
-                if init_parts:
-                    system_prompt = (
-                        f"{system_prompt}\n\n"
-                        f"## Memory from previous sessions\n"
-                        + "\n\n".join(init_parts)
-                    )
-            except Exception as e:
-                print(f"[agentdb] session-start memory load error: {e}")
+        history_store = JsonFileSessionStore.for_runner(store.base, self.name)
+        state = classify_session(
+            platform.session_store.get_session_meta(thread_id),
+            self.has_client(thread_id),
+        )
+        system_prompt = build_system_prompt(
+            state=state,
+            history_path=str(history_store.directory / f"{thread_id}.json"),
+            workspace_path=workspace_path,
+            agentdb_middleware=self._agentdb_middleware,
+            session_id=thread_id,
+        )
 
         on_compact = None
         if self._agentdb is not None:

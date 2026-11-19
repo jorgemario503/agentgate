@@ -6,6 +6,8 @@ import asyncio
 import json
 import os
 import time
+from enum import Enum
+from typing import Optional
 
 from core.config import (
     CLAUDE_SETTINGS,
@@ -14,9 +16,61 @@ from core.config import (
 )
 
 
-# Threads that opted out of the idle reaper via /idle start.
+# Threads that opted out of the idle reaper via /idle stop.
 # In-memory only: resets on restart, like auto-approval.
 _keep_alive: set[str] = set()
+
+
+class SessionState(Enum):
+    """How a thread relates to the session it may resume.
+
+    The classification answers one question: should this turn inject a resume
+    prompt? It is derived from the registry entry plus whether *this process*
+    still holds a live client — never from the session id, because the
+    non-Claude runners always pass `thread_id` as the session id and so cannot
+    distinguish a resume from a fresh start.
+
+    `opener` is the one-line status shown to the user when a session starts;
+    it is derived from the state so the two cannot drift.
+    """
+
+    NEW = "new"
+    WARM = "warm"
+    COLD = "cold"
+    RESUME_AFTER_TIMEOUT = "resume_after_timeout"
+
+    @property
+    def resumes(self) -> bool:
+        """True when the model has prior context this process must re-supply."""
+        return self in (SessionState.COLD, SessionState.RESUME_AFTER_TIMEOUT)
+
+    @property
+    def opener(self) -> str:
+        """User-facing status line; empty for WARM (already connected)."""
+        if self is SessionState.WARM:
+            return ""
+        if self.resumes:
+            return "🔄 Resuming session"
+        return "🚀 Starting agent session"
+
+
+def classify_session(meta: Optional[dict], has_client: bool) -> SessionState:
+    """Classify a thread into a `SessionState`.
+
+    `meta` is the registry entry (None when the thread was never registered or
+    was removed by `/stop`); `has_client` is `runner.has_client(thread_id)`.
+
+    An expired row outranks a live client: the reaper decided this session was
+    over, and its history must be re-injected even if a stale client lingers.
+    """
+    if not meta:
+        return SessionState.NEW
+    if meta.get("expired"):
+        return SessionState.RESUME_AFTER_TIMEOUT
+    if has_client:
+        return SessionState.WARM
+    return SessionState.COLD
+
 
 
 def enable_keep_alive(thread_id: str) -> None:
@@ -137,10 +191,18 @@ class SessionStore:
     # -------------------------
     # WORKSPACE SETUP
     # -------------------------
-    def ensure_workspace(self, thread_id: str) -> str:
+    def ensure_workspace(self, thread_id: str, claude_settings: bool = True) -> str:
+        """Create the thread's workspace.
+
+        `claude_settings` writes `.claude/settings.json`, which the Claude
+        runner picks up as its project settings in the cwd. The other runners
+        never read it, so the bots pass False for them. Defaults to True so an
+        existing caller keeps the old behaviour.
+        """
         workspace_path = f"{self.base}/{thread_id}/workspace"
         os.makedirs(workspace_path, exist_ok=True)
-        self.write_claude_settings(workspace_path)
+        if claude_settings:
+            self.write_claude_settings(workspace_path)
         return workspace_path
 
     # -------------------------
@@ -181,3 +243,14 @@ class SessionStore:
                         )
                     except Exception as e:
                         print(f"[reaper] Failed to notify {thread_id}: {e}")
+
+
+def wants_claude_settings(runner) -> bool:
+    """True when the runner will read `.claude/settings.json` from its cwd.
+
+    Only the Claude runner does. Kept here so the bots share one check rather
+    than importing ClaudeRunner each time.
+    """
+    from runners.claude import ClaudeRunner
+
+    return isinstance(runner, ClaudeRunner)

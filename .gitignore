@@ -7,6 +7,9 @@ ollama_history/
 mlx_history/
 agentdb-workspace/
 
+# Agent specs
+docs/spec
+
 # Secrets
 .env
 .env.local

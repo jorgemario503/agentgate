@@ -55,7 +55,10 @@ would also need belongs in `core/`.
 |---|---|
 | `config.py` | Loads dotenv first (every entrypoint imports it before anything else) and exposes module-level constants. |
 | `providers.py` | Declarative provider specs plus the four-layer precedence resolution used by open-model runners. |
-| `sessions.py` | Per-platform session registry on disk, workspace creation, directory tool, audit log, idle reaper. |
+| `sessions.py` | Per-platform session registry on disk, workspace creation, directory tool, audit log, idle reaper, and `SessionState`/`classify_session`. |
+| `prompts.py` | Every prompt surface: base instructions, hard rules, resume block, AgentDB memory, and the compaction summariser. Owns section ordering and file loading. |
+| `history.py` | `JsonFileHistoryStore` — one `<name>_history/<thread_id>.json` rule for all open-model runners. |
+| `cache_key.py` | Provider allowlist for session-scoped prompt cache keys. |
 | `approvals.py` | The async approval/answer gate and the in-memory auto-approve set. |
 | `commands.py` | `CommandSpec` registry, `parse_command`, `dispatch`, and every command implementation. |
 | `agentdb.py` | Optional governed-memory integration surface. |
@@ -74,13 +77,96 @@ AgentDB methods). Every backend implements it:
 | Runner | Backend | Permission gate |
 |---|---|---|
 | `claude.py` | Claude Agent SDK (spawns the local `claude` CLI) | SDK `can_use_tool` callback |
-| `deepinfra.py` | DeepInfra (OpenAI-compatible) | tool-call loop, before execution |
-| `fireworks.py` | Fireworks | tool-call loop, before execution |
-| `local.py` | Ollama / MLX / llama.cpp | tool-call loop, before execution |
+| `deepinfra.py` | DeepInfra (`AsyncOpenAI` + `base_url`) | tool-call loop, before execution |
+| `fireworks.py` | Fireworks (`AsyncOpenAI` + `base_url`) | tool-call loop, before execution |
+| `local.py` | Ollama / MLX / llama.cpp (raw `httpx`) | tool-call loop, before execution |
 
-The Claude runner resumes from its own SDK session id; the three open-model
-runners are **serverless** in the sense that they reload conversation history
-from disk keyed by `thread_id` rather than holding it in a live client.
+The two hosted runners both ride on the `openai` package with only a `base_url`
+override, so neither needs a vendor SDK. `local.py` deliberately keeps raw
+`httpx`: it targets arbitrary OpenAI-compatible servers of varying strictness,
+and the reasoning payload already passes `extra_body` as a plain body key,
+which would collide with the SDK's own `extra_body` parameter.
+
+### Prompt assembly
+
+Every prompt surface lives in `core/prompts.py`; the runners only pass state in.
+Sections are emitted **most-stable first**, because providers cache a prompt by
+matching from the first character and discard the cached prefix on the first
+difference:
+
+```
+## Base instructions      stable across every turn of every session
+## Hard rules             stable; the security instructions
+## Resuming an existing session   stable for one session (cold resume only)
+## Memory from previous sessions  may vary per session
+```
+
+Section headings are fixed constants (`SECTION_HEADINGS`) injected by the
+builder, never read from a prompt file, so editing a file cannot break or
+duplicate the structure. Per-turn memory is *not* part of this prefix: the
+runners inject it as an ephemeral system message immediately before the latest
+user turn, so it never disturbs the cached prefix.
+
+The text itself comes from `prompts/*.md` (`base.md`, `hard_rules.md`,
+`resume.md`, `summary.md`), relocatable via `AGENTGATE_PROMPTS_DIR`. Leading
+`#` comment lines are stripped and never reach the model. A missing, empty, or
+unreadable file falls back to a named `FALLBACK_*` constant — never to an empty
+prompt, which would silently drop the hard rules. **All four runners read these
+files**, Claude included: `hard_rules.md` is appended to Claude's preset prompt
+as well as folded into the open-model base prompt, so one edit reaches every
+backend.
+
+### Session state and resume
+
+`core/sessions.py::classify_session(meta, has_client)` decides whether a turn
+needs a resume prompt. The inputs are the registry entry and whether *this
+process* still holds a live client — never the session id, because the
+open-model runners always pass `thread_id` as the session id and so cannot
+distinguish a resume from a fresh start.
+
+| State | Condition | Prompt |
+|---|---|---|
+| `NEW` | no registry entry | base + hard rules |
+| `WARM` | entry, not expired, client alive | none — history is in RAM |
+| `COLD` | entry, not expired, client gone (bot restart) | base + hard rules + resume |
+| `RESUME_AFTER_TIMEOUT` | entry marked `expired` by the reaper | base + hard rules + resume |
+
+An expired row outranks a live client. The resume block names the full history
+file, its format and its `role` values (including `tool`), then replays only the
+last two turns — tool output stays on disk rather than in the prompt.
+
+On resume the system prompt is **authoritative**: `apply_system_prompt()`
+replaces slot 0 of the reloaded history rather than skipping it. The saved
+history always begins with the previous process's system message, so inserting
+only when absent silently discarded every freshly built prompt.
+
+### Session-scoped cache keys
+
+`core/cache_key.py` pins each conversation to its own provider cache lineage,
+keyed by **provider** rather than runner class so Claude and any future SDK
+backend are excluded by construction:
+
+| Provider | Mechanism |
+|---|---|
+| deepinfra | `extra_body={"prompt_cache_key": thread_id}` |
+| fireworks | `extra_headers={"x-session-affinity": thread_id}` |
+| ollama / mlx | opt-in via `AGENTGATE_PROMPT_CACHE_KEY` |
+
+Both are **request-level**: the key is a sibling of `messages` in the body, or
+an HTTP header. It is never placed inside message content — that would spend
+tokens, put volatile data in the cache prefix, and still land after the system
+prompt. The model never sees a session id; continuity comes from the replayed
+`messages` array. If a server rejects the key the request is retried without it,
+so a cache optimisation never costs a turn.
+
+### Conversation history on disk
+
+All open-model runners use one rule: `<session_base>/<name>_history/<thread_id>.json`,
+via `core/history.py`. Only one runner class serves `local`, so its name is the
+provider (`ollama_history`, `mlx_history`), keeping two local providers from
+sharing a conversation. Migrating from the old `fw_history` / `di_history`
+directories is a manual step; there is no fallback, so an unmigrated directory
+reads as empty rather than silently mixing two locations.
 
 ---
 
@@ -129,9 +215,10 @@ agent-sessions/
 ```
 
 Each bot instantiates its own `SessionStore`, so two platforms can never collide
-on the same thread id. The Claude runner also writes `settings.json` into each
+on the same thread id. Only the Claude runner writes `settings.json` into a
 workspace (`write_claude_settings`), which is where the CLI's own allow/deny
-rules live.
+rules live; the bots pass `claude_settings=wants_claude_settings(runner)` so an
+open-model session does not leave a Claude settings file behind.
 
 `thread_id` is the platform's native identifier rendered as a string — a Slack
 thread timestamp, a Telegram chat id, or a WhatsApp phone number. The runner,
@@ -139,8 +226,9 @@ the approval gate, and the audit log all key off that single string.
 
 **Lifecycle:** the first message creates the session and workspace; subsequent
 messages reuse it; the idle reaper expires it after `IDLE_TIMEOUT_SECONDS`
-(default 8h). A `/stop` (or `stop session`) tears down the client but keeps the
-session id so the agent can resume its transcript.
+(default 8h). A `/stop` (or `stop session`) tears down the client and removes
+the registry row but keeps the history file, so a reopened thread continues its
+transcript — history is keyed by `thread_id`, so nothing leaks between threads.
 
 ---
 

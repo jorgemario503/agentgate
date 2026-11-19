@@ -160,7 +160,15 @@ CLAUDE_SETTINGS = {
 }
 
 # -------------------------
-# SECURITY LAYER 4 — system prompt appended to every session
+# SECURITY LAYER 4 — hard rules appended to every session
+#
+# FALLBACK ONLY. Every runner — Claude included — reads the rules from
+# prompts/hard_rules.md via core.prompts.build_hard_rules(); this string is
+# used only when that file is missing, empty, or unreadable.
+#
+# Edit prompts/hard_rules.md to change the rules. Keep this copy roughly in
+# step so a deleted file still degrades to sane text, but it is not the source
+# of truth and nothing reads it during normal operation.
 # -------------------------
 SYSTEM_PROMPT = """
 You are a coding assistant working inside a local directory.

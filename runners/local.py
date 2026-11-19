@@ -33,9 +33,15 @@ from core.config import (
     BLOCKED_PATTERNS,
     CLAUDE_SETTINGS,
     SDK_ALLOWED_TOOLS,
-    SYSTEM_PROMPT,
 )
 from core.agentdb import AgentDBSurface
+from core.history import JsonFileHistoryStore
+from core.prompts import (
+    apply_system_prompt,
+    build_summary_prompt,
+    build_system_prompt,
+)
+from core.sessions import classify_session
 from core.providers import settings_for
 from core.reasoning import (
     build_request_kwargs,
@@ -57,16 +63,6 @@ HISTORY_RESERVE_TOKENS = 2000
 SUMMARY_TEMPERATURE = 0.2
 COMPACT_TRIGGER_RATIO = 0.7
 COMPACT_TARGET_RATIO = 0.5
-
-_SUMMARY_SYSTEM_PROMPT = (
-    "You are condensing an earlier portion of an ongoing coding-agent "
-    "conversation so it can be removed from the live context. Preserve "
-    "all information needed to continue the conversation correctly: user "
-    "goals, decisions and reasoning, concrete facts (file paths, function "
-    "names, APIs, numbers, commands, errors), code changes made, remaining "
-    "tasks, and open questions. Omit routine chatter and repeated info. "
-    "Write plain prose, no headings."
-)
 
 import re as _re
 
@@ -115,20 +111,11 @@ class SessionStore(ABC):
     def save(self, session_id: str, messages: list[dict]) -> None: ...
 
 
-class JsonFileSessionStore(SessionStore):
+class JsonFileSessionStore(JsonFileHistoryStore, SessionStore):
+    """Persisted message history for one runner (see core.history)."""
+
     def __init__(self, directory: str | Path = "./local_sessions"):
-        self.directory = Path(directory)
-
-    def _path(self, session_id: str) -> Path:
-        self.directory.mkdir(parents=True, exist_ok=True)
-        return self.directory / f"{session_id}.json"
-
-    def load(self, session_id: str) -> list[dict]:
-        path = self._path(session_id)
-        return json.loads(path.read_text()) if path.exists() else []
-
-    def save(self, session_id: str, messages: list[dict]) -> None:
-        self._path(session_id).write_text(json.dumps(messages, indent=2))
+        JsonFileHistoryStore.__init__(self, directory=directory)
 
 
 # ---------------------------------------------------------------------------
@@ -389,15 +376,6 @@ def permission_decision(tool_name: str, input_data: dict) -> str:
 
 CanUseTool = Callable[[str, dict], Awaitable[Any]]
 
-_BASE_SYSTEM_PROMPT = (
-    "You are a coding assistant operating in a local workspace via tools. "
-    "Available tools: Bash (shell), Read, Write, Edit, Glob, Grep, and "
-    "lookup_directory / remember_directory. Prefer Read/Glob/Grep for inspection "
-    "and Edit for surgical changes; use Bash for everything else. When you refer to "
-    "a directory by name, call lookup_directory first before searching."
-)
-
-
 def _safe_json_args(raw: Optional[str]) -> dict:
     if not raw:
         return {}
@@ -460,9 +438,9 @@ class LocalAgentClient:
         self.on_compact = on_compact
 
     async def connect(self) -> None:
-        self.messages = self.session_store.load(self.session_id)
-        if self.system_prompt and not any(m.get("role") == "system" for m in self.messages):
-            self.messages.insert(0, {"role": "system", "content": self.system_prompt})
+        self.messages = apply_system_prompt(
+            self.session_store.load(self.session_id), self.system_prompt
+        )
 
     async def query(self, prompt: str, ephemeral_context: Optional[str] = None) -> None:
         self.messages.append({"role": "user", "content": prompt})
@@ -562,7 +540,7 @@ class LocalAgentClient:
 
         transcript = _render_turns_for_summary(to_compact)
         summary = await self._summarize([
-            {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
+            {"role": "system", "content": build_summary_prompt()},
             {"role": "user", "content": transcript},
         ], self.summary_max_tokens)
         if not summary:
@@ -671,7 +649,7 @@ class LocalAgentClient:
 
         async def _do(text: str, label: str) -> str:
             return await self._summarize([
-                {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
+                {"role": "system", "content": build_summary_prompt()},
                 {"role": "user", "content": f"Summarize this '{tool_name}' output ({label}), preserving all technical details:\n\n{text}"},
             ], per_chunk_tokens)
 
@@ -682,7 +660,7 @@ class LocalAgentClient:
         combined = "\n\n".join(valid)
         if len(combined) > cap:
             final = await self._summarize([
-                {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
+                {"role": "system", "content": build_summary_prompt()},
                 {"role": "user", "content": combined[:chunk_size]},
             ], self.summary_max_tokens)
             return final or combined[:cap] + "\n...[truncated]"
@@ -1035,32 +1013,18 @@ class LocalRunner:
             )
 
         store = platform.session_store
-        history_store = JsonFileSessionStore(directory=f"{store.base}/{self.name}_history")
-        system_prompt = f"{_BASE_SYSTEM_PROMPT}\n\n{SYSTEM_PROMPT}"
-
-        # Local models can't call agentdb tools mid-turn, so pre-load memory
-        # records from previous sessions into the system prompt at session start.
-        # Use prepare_turn (not async) to get only memory records — skills,
-        # workspace, and work context are injected fresh each turn via ephemeral_context.
-        if self._agentdb_middleware is not None:
-            try:
-                init_messages, _ = self._agentdb_middleware.prepare_turn(
-                    user_query="",
-                    session_id=thread_id,
-                    working_dirs=[workspace_path] + list(ADDITIONAL_DIRS),
-                )
-                init_parts = [
-                    m["content"] for m in init_messages
-                    if m.get("role") in ("system", "user") and m.get("content", "").strip()
-                ]
-                if init_parts:
-                    system_prompt = (
-                        f"{system_prompt}\n\n"
-                        f"## Memory from previous sessions\n"
-                        + "\n\n".join(init_parts)
-                    )
-            except Exception as e:
-                print(f"[agentdb] session-start memory load error: {e}")
+        history_store = JsonFileSessionStore.for_runner(store.base, self.name)
+        state = classify_session(
+            platform.session_store.get_session_meta(thread_id),
+            self.has_client(thread_id),
+        )
+        system_prompt = build_system_prompt(
+            state=state,
+            history_path=str(history_store.directory / f"{thread_id}.json"),
+            workspace_path=workspace_path,
+            agentdb_middleware=self._agentdb_middleware,
+            session_id=thread_id,
+        )
 
         on_compact = None
         if self._agentdb is not None:

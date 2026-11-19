@@ -33,7 +33,7 @@ Sessions are isolated per platform and per thread, stored under
 | Backend | Flag | Requires |
 |---|---|---|
 | Claude (default) | `--claude` | `claude` CLI logged in |
-| Fireworks | `--fireworks` | `pip install "fireworks-ai>=1.2.0"` + `FIREWORKS_API_KEY` |
+| Fireworks | `--fireworks` | `FIREWORKS_API_KEY` + `FIREWORKS_MODEL` |
 | DeepInfra | `--deepinfra` | `DEEPINFRA_API_KEY` + `DEEPINFRA_MODEL` |
 | Ollama | `--ollama` | Ollama server running, `OLLAMA_MODEL` |
 | MLX | `--mlx` | mlx-lm server running, `MLX_MODEL` |
@@ -233,6 +233,87 @@ python run.py --telegram ollama surfer qwen3:14b \
 [ARCHITECTURE.md](ARCHITECTURE.md#configuration-precedence) for how precedence
 and origin tracking work.
 
+### Custom system prompts
+
+Prompt text can be overridden without editing source. Drop a file in
+`prompts/` — or point `AGENTGATE_PROMPTS_DIR` at your own directory:
+
+| File | Replaces |
+|---|---|
+| `base.md` | the workflow prompt (tool list, inspection preferences) |
+| `hard_rules.md` | the security instructions |
+| `resume.md` | the opening lines of the resume block |
+| `summary.md` | the compaction summariser's instructions |
+
+All four files ship and are active, so the usual route is to edit them in
+place. Use `AGENTGATE_PROMPTS_DIR` only to keep your copies outside the repo:
+
+```bash
+export AGENTGATE_PROMPTS_DIR=/path/to/my-prompts
+```
+
+A missing, empty, or unreadable file falls back to the built-in text — an
+override can never blank the prompt. All four files ship and are active.
+
+**Every runner reads these files**, including Claude: `hard_rules.md` is
+appended to Claude's preset prompt as well as to the non-Claude base prompt,
+so one edit reaches all backends.
+
+Each file documents its own conventions at the top. The short version: leading
+`#` comments are stripped and never reach the model; the section heading is
+added by AgentGate, so do not repeat it in the file; and anything from the
+first non-comment line onward *is* sent.
+
+### Section headings
+
+Sections are delimited by fixed markdown headings, defined once in
+`core/prompts.py` (`SECTION_HEADINGS`) and injected in stable-to-volatile
+order:
+
+| Section | Heading |
+|---|---|
+| base instructions | `## Base instructions` |
+| hard rules | `## Hard rules` |
+| resume block | `## Resuming an existing session` |
+| AgentDB memory | `## Memory from previous sessions` |
+
+The headings are structural, not content: a customised prompt file replaces a
+section's body, never its heading, so the structure cannot be broken by an
+edit. Injection lives in one module — the runners only pass their state in.
+
+### A note on `hard_rules.md`
+
+Shipping it changes the rule text the model sees, so edit it deliberately. It
+is a *prompt*, not an enforcement layer: the real controls are
+`core/approvals.py`, `permissions.yaml` and the blocked-pattern list, which
+stop calls regardless of what the prompt says. The file states this itself so
+nobody mistakes editing it for configuring the guardrails.
+
+### Prompt cache keys
+
+The deepinfra and fireworks runners pin each conversation to its own provider
+cache lineage, so concurrent sessions on the same model and API key do not
+share a cache entry:
+
+| Runner | Mechanism |
+|---|---|
+| deepinfra | `prompt_cache_key` in the request body |
+| fireworks | `x-session-affinity` header |
+| ollama / mlx | **opt-in** via `AGENTGATE_PROMPT_CACHE_KEY=1` |
+
+The key is the thread id. Claude is excluded: its SDK manages session state
+itself. The local runners are opt-in because they POST to arbitrary
+OpenAI-compatible servers and a strict one may reject an unknown field; if a
+request is rejected for that reason it is retried without the key, so a cache
+optimisation never costs you a turn.
+
+**Keep the prompt prefix stable.** Providers cache a prompt by matching from
+the first character and discard the cached prefix on the first difference, so
+keep the most stable text at the top and never put timestamps, turn counters,
+thread ids or workspace paths in the prefix. The shipped files carry a header
+explaining this; leading `#` comment lines are stripped and never reach the
+model.
+
 ---
 
 ## Allowlists
@@ -319,11 +400,14 @@ agentgate/
 ├── permissions.yaml          # AgentDB write permissions
 ├── docs/slack-manifest.yaml  # Slack app manifest (tiered scopes)
 │
+├── prompts/                  # editable prompt text: base.md, hard_rules.md,
+│                             #   resume.md, summary.md (all runners read these)
 ├── bots/                     # transport: slack.py, telegram.py, whatsapp.py
 ├── runners/                  # execution: base.py, claude.py, deepinfra.py,
 │                             #            fireworks.py, local.py
-├── core/                     # shared: config, providers, sessions, approvals,
-│                             #         commands, agentdb, reasoning/
+├── core/                     # shared: config, providers, sessions, prompts,
+│                             #   history, cache_key, approvals, commands,
+│                             #   agentdb, reasoning/
 └── tests/
 ```
 

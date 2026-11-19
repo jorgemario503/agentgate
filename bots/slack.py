@@ -28,7 +28,7 @@ from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 import core.approvals as approvals
 import core.commands as commands
 import core.config as config
-from core.sessions import SessionStore
+from core.sessions import SessionStore, classify_session, wants_claude_settings
 from runners.base import PlatformConfig, TaskInterrupted, check_blocked
 
 CHUNK = 3800  # Slack hard limit is 4000; leave headroom
@@ -78,14 +78,7 @@ async def select_runner(backend: str, model: str | None = None):
         return runner
 
     if backend == "fireworks":
-        try:
-            from runners.fireworks import FireworksRunner
-        except ImportError as e:
-            raise SystemExit(
-                "❌ --fireworks selected but the Fireworks SDK isn't installed.\n"
-                "   Run:  pip install \"fireworks-ai>=1.2.0\"\n"
-                f"   (import error: {e})"
-            )
+        from runners.fireworks import FireworksRunner
         runner = FireworksRunner()
         active = await runner.set_model(model)
         print(f"[fireworks] active model: {active}")
@@ -257,7 +250,9 @@ def _register_handlers(platform: PlatformConfig):
         if slack_files and isinstance(runner, ClaudeRunner):
             meta_for_ws = store.get_session_meta(thread_id)
             ws_path = (meta_for_ws["workspace_path"] if meta_for_ws
-                       else store.ensure_workspace(thread_id))
+                       else store.ensure_workspace(
+                           thread_id, claude_settings=wants_claude_settings(runner)
+                       ))
             saved_files = await _download_slack_files(slack_files, ws_path)
             if saved_files:
                 note = "\n".join(f"[file saved to workspace: {f}]" for f in saved_files)
@@ -283,8 +278,10 @@ def _register_handlers(platform: PlatformConfig):
             await _post(channel, thread_id, "⚠️ No active session. Mention me with a task to start one.")
             return
 
-        prior_session_id = meta.get("session_id") if meta else None
-        start_msg = "🔄 Resuming session" if prior_session_id else "🚀 Starting agent session"
+        # Derived from registry state, not session_id: the stateless runners
+        # keep session_id unset or equal to thread_id, so it cannot tell a
+        # resume from a fresh start.
+        start_msg = classify_session(meta, False).opener
         await _post(
             channel, thread_id,
             f"{start_msg}...\n"
@@ -292,7 +289,9 @@ def _register_handlers(platform: PlatformConfig):
             f"`@bot yes` / `@bot no` right here.",
         )
 
-        workspace_path = store.ensure_workspace(thread_id)
+        workspace_path = store.ensure_workspace(
+            thread_id, claude_settings=wants_claude_settings(runner)
+        )
         store.register_session(thread_id, channel, workspace_path)
         meta = store.get_session_meta(thread_id)
         await _run_and_reply(

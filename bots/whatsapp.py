@@ -44,7 +44,7 @@ import uvicorn
 import core.approvals as approvals
 import core.commands as commands
 import core.config as config
-from core.sessions import SessionStore
+from core.sessions import SessionStore, classify_session, wants_claude_settings
 from runners.base import PlatformConfig, TaskInterrupted, check_blocked
 
 PORT = int(os.environ.get("WHATSAPP_LINKED_PORT", 8081))
@@ -87,14 +87,7 @@ async def select_runner(backend: str, model: str | None = None):
         return runner
 
     if backend == "fireworks":
-        try:
-            from runners.fireworks import FireworksRunner
-        except ImportError as e:
-            raise SystemExit(
-                "❌ --fireworks selected but the Fireworks SDK isn't installed.\n"
-                "   Run:  pip install \"fireworks-ai>=1.2.0\"\n"
-                f"   (import error: {e})"
-            )
+        from runners.fireworks import FireworksRunner
         runner = FireworksRunner()
         active = await runner.set_model(model)
         print(f"[fireworks] active model: {active}")
@@ -202,14 +195,18 @@ async def handle_message(phone: str, text: str):
         await _run_and_reply(phone, text, meta["workspace_path"], meta.get("session_id"))
         return
 
-    prior_session_id = meta.get("session_id") if meta else None
-    start_msg = "🔄 Resuming session" if prior_session_id else "🚀 Starting agent session"
+    # Derived from registry state, not session_id: the stateless runners
+    # keep session_id unset or equal to thread_id, so it cannot tell a
+    # resume from a fresh start.
+    start_msg = classify_session(meta, False).opener
     await send_whatsapp(
         phone,
         f"{start_msg}...\nWhen the agent needs permission (e.g. git commit), reply `yes` or `no`.",
     )
 
-    workspace_path = _whatsapp_store.ensure_workspace(thread_id)
+    workspace_path = _whatsapp_store.ensure_workspace(
+        thread_id, claude_settings=wants_claude_settings(_runner)
+    )
     _whatsapp_store.register_session(thread_id, phone, workspace_path)
     meta = _whatsapp_store.get_session_meta(thread_id)
     await _run_and_reply(phone, text, workspace_path, meta.get("session_id"))
