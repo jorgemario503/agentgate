@@ -20,11 +20,11 @@ from core.config import (
     BLOCKED_PATTERNS,
     CLAUDE_SETTINGS,
     SDK_ALLOWED_TOOLS,
-    SYSTEM_PROMPT,
 )
 from core.agentdb import AgentDBSurface
 from core.history import JsonFileHistoryStore
-from core.prompts import apply_system_prompt
+from core.prompts import apply_system_prompt, build_system_prompt
+from core.sessions import classify_session
 from core.providers import settings_for
 from core.reasoning import (
     build_request_kwargs,
@@ -416,15 +416,6 @@ def permission_decision(tool_name: str, input_data: dict) -> str:
 # ---------------------------------------------------------------------------
 
 CanUseTool = Callable[[str, dict], Awaitable[Any]]
-
-_BASE_SYSTEM_PROMPT = (
-    "You are a coding assistant operating in a local workspace via tools. "
-    "Available tools: Bash (shell), Read, Write, Edit, Glob, Grep, and "
-    "lookup_directory / remember_directory. Prefer Read/Glob/Grep for inspection "
-    "and Edit for surgical changes; use Bash for everything else. When you refer to "
-    "a directory by name, call lookup_directory first before searching."
-)
-
 
 def _safe_json_args(raw: Optional[str]) -> dict:
     if not raw:
@@ -989,30 +980,17 @@ class DeepInfraRunner:
             return self._clients[thread_id]
         store = platform.session_store
         history_store = JsonFileSessionStore.for_runner(store.base, self.name)
-        system_prompt = f"{_BASE_SYSTEM_PROMPT}\n\n{SYSTEM_PROMPT}"
-        # Local models can't call agentdb tools mid-turn, so pre-load memory
-        # records from previous sessions into the system prompt at session start.
-        # Use prepare_turn (not async) to get only memory records — skills,
-        # workspace, and work context are injected fresh each turn via ephemeral_context.
-        if self._agentdb_middleware is not None:
-            try:
-                init_messages, _ = self._agentdb_middleware.prepare_turn(
-                    user_query="",
-                    session_id=thread_id,
-                    working_dirs=[workspace_path] + list(ADDITIONAL_DIRS),
-                )
-                init_parts = [
-                    m["content"] for m in init_messages
-                    if m.get("role") in ("system", "user") and m.get("content", "").strip()
-                ]
-                if init_parts:
-                    system_prompt = (
-                        f"{system_prompt}\n\n"
-                        f"## Memory from previous sessions\n"
-                        + "\n\n".join(init_parts)
-                    )
-            except Exception as e:
-                print(f"[agentdb] session-start memory load error: {e}")
+        state = classify_session(
+            platform.session_store.get_session_meta(thread_id),
+            self.has_client(thread_id),
+        )
+        system_prompt = build_system_prompt(
+            state=state,
+            history_path=str(history_store.directory / f"{thread_id}.json"),
+            workspace_path=workspace_path,
+            agentdb_middleware=self._agentdb_middleware,
+            session_id=thread_id,
+        )
         on_compact = None
         if self._agentdb is not None:
             db = self._agentdb

@@ -218,3 +218,75 @@ def test_sections_ordered_stable_to_volatile(tmp_path):
         state=SessionState.COLD, history_path=str(path), workspace_path="/ws"
     )
     assert prompt.index(HARD_RULE_MARKER) < prompt.index(str(path))
+
+
+# -- wiring: the runners build the prompt themselves -----------------------
+
+
+@pytest.mark.parametrize(
+    "runner_module,runner_kind",
+    [
+        pytest.param("local", "local", id="local"),
+        pytest.param("fireworks", "fireworks", id="fireworks"),
+        pytest.param("deepinfra", "deepinfra", id="deepinfra"),
+    ],
+)
+def test_cold_resume_injects_resume_block(runner_module, runner_kind, tmp_path, monkeypatch):
+    """A runner whose client is gone must build a prompt naming the history."""
+    import asyncio
+
+    from runners.base import PlatformConfig
+
+    mod = __import__(f"runners.{runner_module}", fromlist=["x"])
+    thread = "t9"
+
+    class Store:
+        base = str(tmp_path)
+
+    store = Store()
+    # An unexpired registry row plus no live client is exactly COLD.
+    meta = {"session_id": thread, "workspace_path": "/ws", "expired": False}
+
+    monkeypatch.setenv("DEEPINFRA_API_KEY", "k")
+    monkeypatch.setenv("FIREWORKS_API_KEY", "k")
+    if runner_kind == "fireworks":
+        runner = mod.FireworksRunner(model="gpt-oss-20b")
+    elif runner_kind == "deepinfra":
+        import core.config as cfg
+        monkeypatch.setattr(cfg, "AGENTDB_ENABLED", False)
+        runner = mod.DeepInfraRunner(model="test-model")
+    else:
+        runner = mod.LocalRunner(
+            name="ollama", base_url="http://localhost:11434/v1", model="test-model"
+        )
+
+    # Seed history in the runner's own directory.
+    history_dir = tmp_path / f"{runner.name}_history"
+    history_dir.mkdir(parents=True, exist_ok=True)
+    (history_dir / f"{thread}.json").write_text(
+        json.dumps(
+            [
+                {"role": "system", "content": "STALE"},
+                {"role": "user", "content": "the earlier question"},
+                {"role": "assistant", "content": "the earlier answer"},
+            ]
+        )
+    )
+
+    platform = PlatformConfig(session_store=store, agent_id="a")
+    monkeypatch.setattr(
+        type(platform.session_store), "get_session_meta", lambda self, tid: meta, raising=False
+    )
+
+    if runner_kind == "local":
+        client = asyncio.run(runner._get_or_create_client(thread, "/ws", None, platform))
+    else:
+        client = asyncio.run(
+            runner._get_or_create_client(thread, "/ws", thread, None, platform)
+        )
+
+    system = client.messages[0]["content"]
+    assert "Resuming an existing session" in system
+    assert str(history_dir / f"{thread}.json") in system
+    assert "the earlier answer" in system
+    assert HARD_RULE_MARKER in system

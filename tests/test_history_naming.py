@@ -88,6 +88,9 @@ def test_runner_history_store_uses_name_history(module, name, tmp_path, monkeypa
     class Store:
         base = str(tmp_path)
 
+        def get_session_meta(self, thread_id):
+            return None
+
     monkeypatch.setenv("DEEPINFRA_API_KEY", "k")
     monkeypatch.setenv("FIREWORKS_API_KEY", "k")
     if module is fireworks:
