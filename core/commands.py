@@ -9,6 +9,7 @@ returned string back through its own transport.
 """
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Awaitable, Callable, Optional
@@ -513,8 +514,24 @@ def _build_index() -> dict[str, CommandSpec]:
 _INDEX = _build_index()
 
 
+# Matches the leading command token of a Telegram-style "/cmd@BotName args".
+# Telegram matches commands on the token up to the first space or '@', but the
+# raw message text still carries both the slash and the @mention, so callers
+# that dispatch raw text (bots/telegram.py) need them removed here.
+_TELEGRAM_COMMAND_RE = re.compile(r"^/(?P<cmd>[^\s@]+)(?:@\S*)?")
+
+
 def _normalise(text: str) -> str:
-    return " ".join(text.strip().lower().split())
+    """Lowercase, collapse whitespace, and drop a leading Telegram slash/mention.
+
+    Slashless input is returned unchanged, so Slack's pre-cleaned text (which
+    never carries a slash) parses exactly as before.
+    """
+    text = text.strip()
+    m = _TELEGRAM_COMMAND_RE.match(text)
+    if m:
+        text = m.group("cmd") + text[m.end():]
+    return " ".join(text.lower().split())
 
 
 def parse_command(text: str) -> tuple[CommandSpec, str] | None:
