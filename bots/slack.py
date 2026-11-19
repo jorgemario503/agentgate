@@ -2,7 +2,7 @@
 Slack entrypoint — @mention-only bot that remote-controls a local agent
 session per thread, with runtime tool approvals relayed to Slack.
 
-Run from a shell with `claude` on PATH (or with --fireworks/--ollama/--mlx):
+Run from a shell with `claude` on PATH (or with --deepinfra/--fireworks/--ollama/--mlx):
     python -m bots.slack
     python -m bots.slack --ollama --model qwen3:14b
 """

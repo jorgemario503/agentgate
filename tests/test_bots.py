@@ -154,3 +154,40 @@ def test_whatsapp_explicit_webhook_url_wins_over_port(monkeypatch):
     monkeypatch.delenv("WHATSAPP_LINKED_PORT", raising=False)
     monkeypatch.delenv("WPPCONNECT_WEBHOOK_URL", raising=False)
     importlib.reload(wbot)
+
+
+# ---------------------------------------------------------------------------
+# Docstring / help-text drift
+# ---------------------------------------------------------------------------
+
+def test_bot_docstrings_list_every_supported_backend():
+    """Each bot's module docstring must name every backend it accepts.
+
+    deepinfra was missing from the telegram and slack docstrings long after
+    the flag itself worked, so keep the list honest with the parser.
+    """
+    import importlib
+    for mod_name in ("bots.telegram", "bots.slack", "bots.whatsapp"):
+        doc = importlib.import_module(mod_name).__doc__ or ""
+        for backend in ("deepinfra", "fireworks", "ollama", "mlx"):
+            assert backend in doc, f"{mod_name} docstring omits --{backend}"
+
+
+def test_model_help_lists_every_supported_backend():
+    """--model help text should name the backends it applies to."""
+    import inspect
+    import importlib
+    for mod_name in ("bots.telegram", "bots.slack", "bots.whatsapp"):
+        src = inspect.getsource(importlib.import_module(mod_name))
+        help_lines = [l for l in src.splitlines() if "Model name override" in l]
+        assert help_lines, f"{mod_name} has no --model help string"
+        for backend in ("deepinfra", "fireworks", "ollama", "mlx"):
+            assert any(backend in l for l in help_lines), (
+                f"{mod_name} --model help omits {backend}"
+            )
+
+
+def test_run_py_valid_runners_covers_all_backends():
+    import run
+    for backend in ("claude", "deepinfra", "fireworks", "ollama", "mlx"):
+        assert backend in run.VALID_RUNNERS
