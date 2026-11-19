@@ -5,12 +5,20 @@ no restart-on-crash, no daemonization.
 
 Usage:
     python run.py --slack
+    python run.py --slack deepinfra
+    python run.py --slack deepinfra deepinfra/Qwen/Qwen3-235B-A22B
     python run.py --telegram
     python run.py --telegram deepinfra
     python run.py --telegram fireworks personal gpt-oss-20b
     python run.py --slack --telegram claude work
     python run.py --whatsapp
     python run.py --list-bots
+
+Positional grammar differs per channel because only Telegram has bot
+identities:
+    --telegram [runner] [bot_id] [model]
+    --slack    [runner] [model]
+    --whatsapp [runner] [model]
 
 Each bot runs as its own subprocess (python -m bots.<channel>).
 stdout/stderr from each child is streamed with a [label] prefix.
@@ -53,10 +61,15 @@ class BotSpec:
             if self.bot_id:
                 argv += ["--bot", self.bot_id]
             return argv
-        if self.channel == "slack":
-            return ["-m", "bots.slack"]
-        if self.channel == "whatsapp":
-            return ["-m", "bots.whatsapp"]
+        if self.channel in CHANNELS_NO_ARGS:
+            # slack/whatsapp accept --<runner> and --model too; only telegram
+            # has a bot identity, so there is no --bot here.
+            argv = ["-m", f"bots.{self.channel}"]
+            if self.runner and self.runner != "claude":
+                argv.append(f"--{self.runner}")
+            if self.model:
+                argv += ["--model", self.model]
+            return argv
         return ["-m", f"bots.{self.channel}"]
 
 
@@ -96,8 +109,25 @@ def parse_argv(argv: list[str]) -> tuple[list[BotSpec], bool, dict[str, str]]:
             overrides[key] = value.strip()
             continue
         if tok.startswith("--") and tok[2:] in CHANNELS_NO_ARGS:
-            specs.append(BotSpec(channel=tok[2:]))
+            channel = tok[2:]
             i += 1
+            # slack/whatsapp: [runner] [model] — no bot identity on these channels.
+            positional: list[str] = []
+            while i < len(argv) and not argv[i].startswith("--") and len(positional) < 2:
+                positional.append(argv[i])
+                i += 1
+            if i < len(argv) and not argv[i].startswith("--"):
+                raise SystemExit(
+                    f"--{channel} accepts at most 2 values (runner, model), "
+                    f"got unexpected extra value: {argv[i]!r}"
+                )
+            runner = positional[0] if len(positional) >= 1 else "claude"
+            model = positional[1] if len(positional) >= 2 else None
+            if runner not in VALID_RUNNERS:
+                raise SystemExit(
+                    f"--{channel}: invalid runner {runner!r} (expected one of {VALID_RUNNERS})"
+                )
+            specs.append(BotSpec(channel=channel, runner=runner, model=model))
             continue
         if tok == "--telegram":
             i += 1
@@ -272,15 +302,17 @@ def main() -> int:
 
     if not specs:
         print(
-            "usage: run.py --slack | --telegram [runner bot_id model] | --whatsapp | --list-bots\n"
+            "usage: run.py [--slack [runner [model]]] [--telegram [runner [bot_id [model]]]]\n"
+            "              [--whatsapp [runner [model]]] | --list-bots\n"
             "       runner: claude (default) | deepinfra | fireworks | ollama | mlx\n"
             "\n"
             "examples:\n"
             "  python run.py --slack\n"
+            "  python run.py --slack deepinfra\n"
             "  python run.py --telegram\n"
             "  python run.py --telegram deepinfra\n"
             "  python run.py --telegram fireworks personal\n"
-            "  python run.py --slack --telegram claude work\n"
+            "  python run.py --whatsapp ollama qwen3:14b\n"
             "  python run.py --list-bots",
             file=sys.stderr,
         )

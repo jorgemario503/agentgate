@@ -2,7 +2,7 @@
 Telegram entrypoint — private-chat-only bot that remote-controls a local
 agent session per chat, with runtime tool approvals relayed to Telegram.
 
-Run from a shell with `claude` on PATH (or with --fireworks/--ollama/--mlx):
+Run from a shell with `claude` on PATH (or with --deepinfra/--fireworks/--ollama/--mlx):
     python -m bots.telegram
     python -m bots.telegram --ollama --model qwen3:14b
     python -m bots.telegram --bot personal   # reads TELEGRAM_BOT_TOKEN_PERSONAL

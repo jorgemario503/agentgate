@@ -141,3 +141,87 @@ def test_parse_argv_set_malformed_raises():
     from run import parse_argv
     with pytest.raises(SystemExit, match="KEY=VALUE"):
         parse_argv(["--slack", "--set", "novalue"])
+
+
+# ---------------------------------------------------------------------------
+# --slack / --whatsapp runner + model (previously silently dropped)
+# ---------------------------------------------------------------------------
+
+def test_parse_argv_slack_runner():
+    from run import parse_argv
+    specs, _, _ = parse_argv(["--slack", "deepinfra"])
+    assert len(specs) == 1
+    assert specs[0].channel == "slack"
+    assert specs[0].runner == "deepinfra"
+    assert specs[0].model is None
+
+
+def test_parse_argv_slack_runner_and_model():
+    from run import parse_argv
+    specs, _, _ = parse_argv(["--slack", "deepinfra", "deepinfra/Qwen/Qwen3-235B-A22B"])
+    s = specs[0]
+    assert s.runner == "deepinfra"
+    assert s.model == "deepinfra/Qwen/Qwen3-235B-A22B"
+
+
+def test_parse_argv_slack_defaults_to_claude():
+    from run import parse_argv
+    specs, _, _ = parse_argv(["--slack"])
+    assert specs[0].runner == "claude"
+    assert specs[0].model is None
+
+
+def test_parse_argv_whatsapp_runner_and_model():
+    from run import parse_argv
+    specs, _, _ = parse_argv(["--whatsapp", "ollama", "qwen3:14b"])
+    s = specs[0]
+    assert s.channel == "whatsapp"
+    assert s.runner == "ollama"
+    assert s.model == "qwen3:14b"
+
+
+def test_parse_argv_slack_invalid_runner_raises():
+    from run import parse_argv
+    with pytest.raises(SystemExit, match="invalid runner"):
+        parse_argv(["--slack", "notarunner"])
+
+
+def test_parse_argv_whatsapp_invalid_runner_raises():
+    from run import parse_argv
+    with pytest.raises(SystemExit, match="invalid runner"):
+        parse_argv(["--whatsapp", "notarunner"])
+
+
+def test_parse_argv_slack_rejects_third_value():
+    from run import parse_argv
+    with pytest.raises(SystemExit, match="at most 2 values"):
+        parse_argv(["--slack", "deepinfra", "model-x", "extra"])
+
+
+def test_parse_argv_slack_does_not_swallow_following_flag():
+    from run import parse_argv
+    specs, _, overrides = parse_argv(["--slack", "deepinfra", "--set", "TEMPERATURE=0.5"])
+    assert len(specs) == 1
+    assert specs[0].runner == "deepinfra"
+    assert overrides == {"TEMPERATURE": "0.5"}
+
+
+def test_botspec_script_argv_slack_emits_runner_and_model():
+    from run import BotSpec
+    argv = BotSpec(channel="slack", runner="deepinfra", model="m-1").script_argv()
+    assert argv[:3] == ["-m", "bots.slack", "--deepinfra"]
+    assert "--model" in argv and "m-1" in argv
+    assert "--bot" not in argv
+
+
+def test_botspec_script_argv_whatsapp_emits_runner_and_model():
+    from run import BotSpec
+    argv = BotSpec(channel="whatsapp", runner="ollama", model="qwen3:14b").script_argv()
+    assert argv[:3] == ["-m", "bots.whatsapp", "--ollama"]
+    assert "--model" in argv and "qwen3:14b" in argv
+
+
+def test_botspec_script_argv_slack_default_runner_omits_flag():
+    from run import BotSpec
+    argv = BotSpec(channel="slack", runner="claude").script_argv()
+    assert argv == ["-m", "bots.slack"]

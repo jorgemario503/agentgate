@@ -9,6 +9,7 @@ returned string back through its own transport.
 """
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Awaitable, Callable, Optional
@@ -513,8 +514,25 @@ def _build_index() -> dict[str, CommandSpec]:
 _INDEX = _build_index()
 
 
+# Telegram sends commands as "/cmd args" — PTB strips the slash to decide which
+# handler fires, but leaves update.message.text intact, so the slash is still
+# there when a raw-text dispatcher sees it. Slack never sends a slash: its bot
+# mention is removed by bots/slack.py before dispatch. Strip the leading slash
+# here so both forms reach the registry; slashless input is unaffected.
+_TELEGRAM_SLASH_RE = re.compile(r"^/(?P<cmd>\S+)")
+
+
 def _normalise(text: str) -> str:
-    return " ".join(text.strip().lower().split())
+    """Lowercase, collapse whitespace, and drop a leading Telegram slash.
+
+    Slashless input is returned unchanged, so Slack's pre-cleaned text (which
+    never carries a slash) parses exactly as before.
+    """
+    text = text.strip()
+    m = _TELEGRAM_SLASH_RE.match(text)
+    if m:
+        text = m.group("cmd") + text[m.end():]
+    return " ".join(text.lower().split())
 
 
 def parse_command(text: str) -> tuple[CommandSpec, str] | None:

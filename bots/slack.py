@@ -2,7 +2,7 @@
 Slack entrypoint — @mention-only bot that remote-controls a local agent
 session per thread, with runtime tool approvals relayed to Slack.
 
-Run from a shell with `claude` on PATH (or with --fireworks/--ollama/--mlx):
+Run from a shell with `claude` on PATH (or with --deepinfra/--fireworks/--ollama/--mlx):
     python -m bots.slack
     python -m bots.slack --ollama --model qwen3:14b
 """
@@ -411,7 +411,7 @@ if __name__ == "__main__":
     group.add_argument("--claude", dest="backend", action="store_const", const="claude",
                        help="Use the Claude Agent SDK backend (default).")
     group.add_argument("--deepinfra", dest="backend", action="store_const", const="deepinfra",
-                       help="Use the Fireworks backend.")
+                       help="Use the DeepInfra backend.")
     group.add_argument("--fireworks", dest="backend", action="store_const", const="fireworks",
                        help="Use the Fireworks backend.")
     group.add_argument("--ollama", dest="backend", action="store_const", const="ollama",
