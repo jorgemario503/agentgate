@@ -13,6 +13,7 @@ copy of this class.
 
 import asyncio
 import json
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -39,8 +40,13 @@ def history(tmp_path):
     return directory, messages
 
 
-def make_client(module, name, history_dir, system_prompt):
-    """Build a client for `module`, skipping runners whose SDK is absent."""
+def make_client(module, name, history_dir, system_prompt, monkeypatch=None):
+    """Build a client for `module`.
+
+    `fireworks-ai` is an optional dependency and the fireworks client refuses
+    to construct without it, so its SDK symbol is patched here. Every existing
+    runner test follows the same convention rather than requiring the package.
+    """
     store = module.JsonFileSessionStore(directory=str(history_dir))
     common = dict(
         name=name,
@@ -51,29 +57,21 @@ def make_client(module, name, history_dir, system_prompt):
     if module is local:
         return local.LocalAgentClient(base_url="http://x", model="m", **common)
     if module is fireworks:
+        if monkeypatch is not None:
+            monkeypatch.setattr(fireworks, "_FIREWORKS_AVAILABLE", True)
+            monkeypatch.setattr(fireworks, "AsyncFireworks", MagicMock(), raising=False)
+        common.pop("name", None)
         return fireworks.FireworksAgentClient(model="m", api_key="k", **common)
     # DeepInfraAgentClient takes no `name` argument, unlike the other two.
     common.pop("name", None)
     return deepinfra.DeepInfraAgentClient(model="m", api_key="k", **common)
 
 
-from runners import deepinfra as _di  # noqa: E402
-from runners import fireworks as _fw  # noqa: E402
-
-
-def _skip_if_unavailable(module):
-    if module is _fw and not getattr(_fw, "_FIREWORKS_AVAILABLE", True):
-        pytest.skip("fireworks-ai not installed")
-    if module is _di and getattr(_di, "AsyncOpenAI", None) is None:
-        pytest.skip("openai sdk not installed")
-
-
 @pytest.mark.parametrize("module,name", RUNNERS)
-def test_p1_reload_replaces_system_prompt(module, name, history):
+def test_p1_reload_replaces_system_prompt(module, name, history, monkeypatch):
     """P1: the freshly built prompt wins over the stale saved one."""
-    _skip_if_unavailable(module)
     history_dir, saved = history
-    client = make_client(module, name, history_dir, "FRESH PROMPT")
+    client = make_client(module, name, history_dir, "FRESH PROMPT", monkeypatch)
     asyncio.run(client.connect())
 
     assert client.messages[0]["content"] == "FRESH PROMPT"
@@ -83,11 +81,10 @@ def test_p1_reload_replaces_system_prompt(module, name, history):
 
 
 @pytest.mark.parametrize("module,name", RUNNERS)
-def test_p2_exactly_one_system_message(module, name, history):
+def test_p2_exactly_one_system_message(module, name, history, monkeypatch):
     """P2: no duplicated system message after replacement."""
-    _skip_if_unavailable(module)
     history_dir, _ = history
-    client = make_client(module, name, history_dir, "FRESH PROMPT")
+    client = make_client(module, name, history_dir, "FRESH PROMPT", monkeypatch)
     asyncio.run(client.connect())
 
     roles = [m.get("role") for m in client.messages]
@@ -96,11 +93,10 @@ def test_p2_exactly_one_system_message(module, name, history):
 
 
 @pytest.mark.parametrize("module,name", RUNNERS)
-def test_p3_empty_prompt_preserves_existing(module, name, history):
+def test_p3_empty_prompt_preserves_existing(module, name, history, monkeypatch):
     """P3: an empty prompt must not wipe the saved system message."""
-    _skip_if_unavailable(module)
     history_dir, _ = history
-    client = make_client(module, name, history_dir, "")
+    client = make_client(module, name, history_dir, "", monkeypatch)
     asyncio.run(client.connect())
 
     assert client.messages[0]["content"] == "STALE SYSTEM FROM PREVIOUS PROCESS"
