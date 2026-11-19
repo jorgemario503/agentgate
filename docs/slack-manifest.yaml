@@ -20,10 +20,11 @@
 #
 # IMPORTANT — USER TOKEN
 #   Channel *search* (conversations.search) is only available to USER tokens;
-#   it cannot be granted to a bot token. If you want the bot to search
-#   conversations, you MUST enable the `user:` scope block and set
-#   SLACK_USER_TOKEN. That means the bot can act with YOUR permissions.
-#   Delete the user: block if you only want bot-identity acting.
+#   it cannot be granted to a bot token. If you want the agent to search
+#   conversations, enable the `user:` scope block below. That means the agent
+#   acts with the installer's permissions when it scripts against the Slack API.
+#   agentgate itself reads only SLACK_BOT_TOKEN and SLACK_APP_TOKEN; it does
+#   not load a user token. Delete the user: block for bot-identity acting only.
 #
 # OUTBOUND ACTIONS ARE STILL GATED
 #   Scopes grant the *capability*, not the *permission to use it silently*.
@@ -58,8 +59,8 @@ oauth_config:
   scopes:
 
     # -------------------------------------------------------------------------
-    # USER SCOPES — only if you want the bot to SEARCH conversations and to
-    # see channels it was never invited to. Requires SLACK_USER_TOKEN.
+    # USER SCOPES — only if you want the agent to SEARCH conversations and to
+    # see channels it was never invited to.
     # Everything here runs with YOUR access rights. Omit this whole block for
     # a bot-identity-only install.
     # -------------------------------------------------------------------------

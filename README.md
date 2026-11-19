@@ -33,7 +33,7 @@ Each bot runs as a private-chat conversation with a long-lived agent session. Th
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/your-org/agentgate
+git clone https://github.com/jorgemario503/agentgate
 cd agentgate
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -67,14 +67,8 @@ SLACK_APP_TOKEN=xapp-...
 The app itself can be created from [`docs/slack-manifest.yaml`](docs/slack-manifest.yaml)
 (*Create New App → From an app manifest*). Its scopes are grouped into tiers —
 core, read-context, outbound, and broader/riskier — so you can delete the tiers
-you don't want before creating the app. Two things worth knowing:
+you don't want before creating the app. Worth knowing:
 
-- **Conversation search needs a user token.** `search:read` is a user-token-only
-  scope; a bot token cannot grant it. Wanting the agent to search channels means
-  acting with the installer's permissions. Note that agentgate itself only reads
-  `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` — a user token is something the agent
-  would pick up from its own environment when it writes a script against the
-  Slack API, not a variable this project wires up.
 - **Scopes grant capability, not silent action.** Outbound pings still pass
   through the approval gate, so the agent asks before messaging someone.
 
