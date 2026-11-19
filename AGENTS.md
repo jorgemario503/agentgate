@@ -12,7 +12,7 @@ AI coding agents. For how the system fits together, read
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python -m pytest -q          # expect 361 passing
+python -m pytest -q          # expect 366 passing
 ```
 
 Never work without a green baseline. If tests fail before you start, fix or

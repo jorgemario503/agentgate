@@ -7,7 +7,7 @@ import pytest
 
 import core.commands as commands
 from core import sessions
-from core.config import IDLE_TIMEOUT_SECONDS, REAPER_INTERVAL_SECONDS
+from core.config import IDLE_TIMEOUT_SECONDS
 from runners.base import PlatformConfig
 
 
@@ -58,26 +58,26 @@ def run(cmd, context):
 
 # -- command behaviour ------------------------------------------------------
 
-def test_idle_start_enables_flag():
+def test_idle_stop_enables_flag():
     store = FakeStore()
-    reply = run("idle start", ctx(store))
+    reply = run("idle stop", ctx(store))
     assert sessions.is_keep_alive("t1")
     assert "disabled" in reply.lower()
 
 
-def test_idle_stop_disables_flag():
+def test_idle_start_disables_flag():
     store = FakeStore()
-    run("idle start", ctx(store))
-    reply = run("idle stop", ctx(store))
+    run("idle stop", ctx(store))
+    reply = run("idle start", ctx(store))
     assert not sessions.is_keep_alive("t1")
     assert "restored" in reply.lower()
 
 
 def test_idle_without_args_reports_state():
     store = FakeStore()
-    assert "currently stop" in run("idle", ctx(store))
-    run("idle start", ctx(store))
     assert "currently start" in run("idle", ctx(store))
+    run("idle stop", ctx(store))
+    assert "currently stop" in run("idle", ctx(store))
 
 
 def test_idle_rejects_unknown_arg():
@@ -87,17 +87,17 @@ def test_idle_rejects_unknown_arg():
 
 def test_idle_is_scoped_per_thread():
     store = FakeStore()
-    run("idle start", ctx(store, thread_id="t1"))
+    run("idle stop", ctx(store, thread_id="t1"))
     assert sessions.is_keep_alive("t1")
     assert not sessions.is_keep_alive("t2")
 
 
 def test_idle_toggle_is_audited():
     store = FakeStore()
-    run("idle start", ctx(store))
     run("idle stop", ctx(store))
+    run("idle start", ctx(store))
     states = [a[0][2]["state"] for a in store.audit]
-    assert states == ["start", "stop"]
+    assert states == ["on", "off"]
 
 
 # -- reaper integration -----------------------------------------------------
@@ -174,14 +174,14 @@ def test_reaper_expires_idle_thread_without_flag(monkeypatch, tmp_path):
     assert set(expired) == {"t1"}
 
 
-def test_reaper_skips_thread_with_idle_start(monkeypatch, tmp_path):
+def test_reaper_skips_thread_with_keepalive_on(monkeypatch, tmp_path):
     sessions.enable_keep_alive("t1")
     closed, expired = _drive_reaper(monkeypatch, ["t1"], tmp_path)
     assert closed == []
     assert expired == []
 
 
-def test_reaper_expires_again_after_idle_stop(monkeypatch, tmp_path):
+def test_reaper_expires_again_after_keepalive_off(monkeypatch, tmp_path):
     sessions.enable_keep_alive("t1")
     sessions.disable_keep_alive("t1")
     closed, expired = _drive_reaper(monkeypatch, ["t1"], tmp_path)

@@ -172,7 +172,7 @@ Declared once in `core/commands.py`; `/help` is generated from the registry.
 | `/approve <proposal_id>` | Approve a proposal (admins only) |
 | `/reject <proposal_id> [reason]` | Reject a proposal (admins only) |
 | `/autoapprove on\|off` | Toggle auto-approval for this chat (admins only) |
-| `/idle start\|stop` | Disable/enable the idle timeout for this chat |
+| `/idle start\|stop` | `stop` skips the idle reaper; `start` restores normal expiry |
 | `/reasoning off\|low\|medium\|high` | Set reasoning effort for this chat |
 | `/reasoning show` | Show the last captured reasoning trace |
 | `/reasoning` | Show current level, backend, model and verification state |
