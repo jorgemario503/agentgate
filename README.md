@@ -255,6 +255,24 @@ override can never blank the prompt. `prompts/` ships an example base prompt
 only. `hard_rules.md` is deliberately **not** shipped: supplying one replaces
 the built-in security instructions wholesale, so it is an opt-in choice.
 
+### Prompt cache keys
+
+The deepinfra and fireworks runners pin each conversation to its own provider
+cache lineage, so concurrent sessions on the same model and API key do not
+share a cache entry:
+
+| Runner | Mechanism |
+|---|---|
+| deepinfra | `prompt_cache_key` in the request body |
+| fireworks | `x-session-affinity` header |
+| ollama / mlx | **opt-in** via `AGENTGATE_PROMPT_CACHE_KEY=1` |
+
+The key is the thread id. Claude is excluded: its SDK manages session state
+itself. The local runners are opt-in because they POST to arbitrary
+OpenAI-compatible servers and a strict one may reject an unknown field; if a
+request is rejected for that reason it is retried without the key, so a cache
+optimisation never costs you a turn.
+
 **Keep the prompt prefix stable.** Providers cache a prompt by matching from
 the first character and discard the cached prefix on the first difference, so
 keep the most stable text at the top and never put timestamps, turn counters,

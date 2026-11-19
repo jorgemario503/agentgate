@@ -22,6 +22,7 @@ from core.config import (
     SDK_ALLOWED_TOOLS,
 )
 from core.agentdb import AgentDBSurface
+from core.cache_key import cache_key_kwargs, retry_without_cache_key
 from core.history import JsonFileHistoryStore
 from core.prompts import apply_system_prompt, build_system_prompt
 from core.sessions import classify_session
@@ -615,8 +616,17 @@ class DeepInfraAgentClient:
         if self.tools:
             kwargs["tools"] = [t.schema for t in self.tools.values()]
         kwargs.update(self._reasoning_kwargs())
+        cache_kwargs = cache_key_kwargs("deepinfra", self.session_id)
         try:
-            completion = await self._client.chat.completions.create(**kwargs)
+            try:
+                completion = await self._client.chat.completions.create(
+                    **kwargs, **cache_kwargs
+                )
+            except Exception as exc:
+                # A server that rejects the cache key must not cost the turn.
+                if not cache_kwargs or not retry_without_cache_key(exc):
+                    raise
+                completion = await self._client.chat.completions.create(**kwargs)
         except Exception as exc:
             state = self._reasoning_state()
             if state.level != "off":
