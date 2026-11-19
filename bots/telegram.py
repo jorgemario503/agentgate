@@ -27,7 +27,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, ContextTyp
 import core.approvals as approvals
 import core.commands as commands
 import core.config as config
-from core.sessions import SessionStore, classify_session
+from core.sessions import SessionStore, classify_session, wants_claude_settings
 from runners.base import PlatformConfig, TaskInterrupted, check_blocked
 
 # ---------------------------------------------------------------------------
@@ -238,7 +238,9 @@ async def _dispatch(runner, chat_id, thread_id, context, prompt, message_id):
         f"`yes` / `no` right here.",
     )
 
-    workspace_path = telegram_store.ensure_workspace(thread_id)
+    workspace_path = telegram_store.ensure_workspace(
+        thread_id, claude_settings=wants_claude_settings(runner)
+    )
     telegram_store.register_session(thread_id, str(chat_id), workspace_path)
     meta = telegram_store.get_session_meta(thread_id)
     await _run_and_reply(
@@ -313,7 +315,9 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _post(context, chat_id, "⚠️ Image and PDF support is only available with the Claude backend.")
         return
 
-    workspace_path = telegram_store.ensure_workspace(thread_id)
+    workspace_path = telegram_store.ensure_workspace(
+        thread_id, claude_settings=wants_claude_settings(runner)
+    )
 
     if message.photo:
         tg_file = await context.bot.get_file(message.photo[-1].file_id)

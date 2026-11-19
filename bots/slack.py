@@ -28,7 +28,7 @@ from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 import core.approvals as approvals
 import core.commands as commands
 import core.config as config
-from core.sessions import SessionStore, classify_session
+from core.sessions import SessionStore, classify_session, wants_claude_settings
 from runners.base import PlatformConfig, TaskInterrupted, check_blocked
 
 CHUNK = 3800  # Slack hard limit is 4000; leave headroom
@@ -257,7 +257,9 @@ def _register_handlers(platform: PlatformConfig):
         if slack_files and isinstance(runner, ClaudeRunner):
             meta_for_ws = store.get_session_meta(thread_id)
             ws_path = (meta_for_ws["workspace_path"] if meta_for_ws
-                       else store.ensure_workspace(thread_id))
+                       else store.ensure_workspace(
+                           thread_id, claude_settings=wants_claude_settings(runner)
+                       ))
             saved_files = await _download_slack_files(slack_files, ws_path)
             if saved_files:
                 note = "\n".join(f"[file saved to workspace: {f}]" for f in saved_files)
@@ -294,7 +296,9 @@ def _register_handlers(platform: PlatformConfig):
             f"`@bot yes` / `@bot no` right here.",
         )
 
-        workspace_path = store.ensure_workspace(thread_id)
+        workspace_path = store.ensure_workspace(
+            thread_id, claude_settings=wants_claude_settings(runner)
+        )
         store.register_session(thread_id, channel, workspace_path)
         meta = store.get_session_meta(thread_id)
         await _run_and_reply(

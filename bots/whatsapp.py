@@ -44,7 +44,7 @@ import uvicorn
 import core.approvals as approvals
 import core.commands as commands
 import core.config as config
-from core.sessions import SessionStore, classify_session
+from core.sessions import SessionStore, classify_session, wants_claude_settings
 from runners.base import PlatformConfig, TaskInterrupted, check_blocked
 
 PORT = int(os.environ.get("WHATSAPP_LINKED_PORT", 8081))
@@ -211,7 +211,9 @@ async def handle_message(phone: str, text: str):
         f"{start_msg}...\nWhen the agent needs permission (e.g. git commit), reply `yes` or `no`.",
     )
 
-    workspace_path = _whatsapp_store.ensure_workspace(thread_id)
+    workspace_path = _whatsapp_store.ensure_workspace(
+        thread_id, claude_settings=wants_claude_settings(runner)
+    )
     _whatsapp_store.register_session(thread_id, phone, workspace_path)
     meta = _whatsapp_store.get_session_meta(thread_id)
     await _run_and_reply(phone, text, workspace_path, meta.get("session_id"))

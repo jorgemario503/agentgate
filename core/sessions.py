@@ -191,10 +191,18 @@ class SessionStore:
     # -------------------------
     # WORKSPACE SETUP
     # -------------------------
-    def ensure_workspace(self, thread_id: str) -> str:
+    def ensure_workspace(self, thread_id: str, claude_settings: bool = True) -> str:
+        """Create the thread's workspace.
+
+        `claude_settings` writes `.claude/settings.json`, which the Claude
+        runner picks up as its project settings in the cwd. The other runners
+        never read it, so the bots pass False for them. Defaults to True so an
+        existing caller keeps the old behaviour.
+        """
         workspace_path = f"{self.base}/{thread_id}/workspace"
         os.makedirs(workspace_path, exist_ok=True)
-        self.write_claude_settings(workspace_path)
+        if claude_settings:
+            self.write_claude_settings(workspace_path)
         return workspace_path
 
     # -------------------------
@@ -235,3 +243,14 @@ class SessionStore:
                         )
                     except Exception as e:
                         print(f"[reaper] Failed to notify {thread_id}: {e}")
+
+
+def wants_claude_settings(runner) -> bool:
+    """True when the runner will read `.claude/settings.json` from its cwd.
+
+    Only the Claude runner does. Kept here so the bots share one check rather
+    than importing ClaudeRunner each time.
+    """
+    from runners.claude import ClaudeRunner
+
+    return isinstance(runner, ClaudeRunner)

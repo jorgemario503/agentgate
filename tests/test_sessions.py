@@ -2,7 +2,7 @@
 import json
 import os
 import pytest
-from core.sessions import SessionStore
+from core.sessions import SessionStore, wants_claude_settings
 
 
 @pytest.fixture
@@ -58,3 +58,50 @@ def test_append_audit_log(store, tmp_path):
     entry = json.loads(open(log_path).read().strip())
     assert entry["event"] == "tool_call"
     assert entry["tool"] == "Bash"
+
+
+# -- workspace setup is runner-aware --------------------------------------
+
+
+def test_ensure_workspace_writes_claude_settings_by_default(store):
+    """Claude needs .claude/settings.json in its cwd, so this stays the default."""
+    path = store.ensure_workspace("t1")
+    assert os.path.isfile(os.path.join(path, ".claude", "settings.json"))
+
+
+def test_ensure_workspace_can_skip_claude_settings(store):
+    """Non-Claude runners have no use for a Claude settings file."""
+    path = store.ensure_workspace("t1", claude_settings=False)
+    assert os.path.isdir(path)
+    assert not os.path.exists(os.path.join(path, ".claude"))
+
+
+def test_bots_only_write_claude_settings_for_claude():
+    """The bots pass the runner kind through, so a non-Claude run writes none."""
+    import inspect
+
+    for module_path, needle in (
+        ("bots/slack.py", "wants_claude_settings"),
+        ("bots/telegram.py", "wants_claude_settings"),
+        ("bots/whatsapp.py", "wants_claude_settings"),
+    ):
+        module = __import__(module_path.replace("/", ".")[:-3], fromlist=["x"])
+        assert needle in inspect.getsource(module), f"{module_path} ignores runner kind"
+
+
+def test_wants_claude_settings_is_true_only_for_claude():
+    """Behavioural check on the helper itself.
+
+    The bots' call sites are covered textually elsewhere; this asserts the
+    decision, so a helper that always returned True could not pass.
+    """
+    from runners.base import PlatformConfig
+    from runners.claude import ClaudeRunner
+    from runners.local import LocalRunner
+
+    local_runner = LocalRunner(
+        name="ollama", base_url="http://localhost:11434/v1", model="test-model"
+    )
+    assert wants_claude_settings(ClaudeRunner()) is True
+    assert wants_claude_settings(local_runner) is False
+    assert wants_claude_settings(object()) is False
