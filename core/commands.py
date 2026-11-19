@@ -514,21 +514,22 @@ def _build_index() -> dict[str, CommandSpec]:
 _INDEX = _build_index()
 
 
-# Matches the leading command token of a Telegram-style "/cmd@BotName args".
-# Telegram matches commands on the token up to the first space or '@', but the
-# raw message text still carries both the slash and the @mention, so callers
-# that dispatch raw text (bots/telegram.py) need them removed here.
-_TELEGRAM_COMMAND_RE = re.compile(r"^/(?P<cmd>[^\s@]+)(?:@\S*)?")
+# Telegram sends commands as "/cmd args" — PTB strips the slash to decide which
+# handler fires, but leaves update.message.text intact, so the slash is still
+# there when a raw-text dispatcher sees it. Slack never sends a slash: its bot
+# mention is removed by bots/slack.py before dispatch. Strip the leading slash
+# here so both forms reach the registry; slashless input is unaffected.
+_TELEGRAM_SLASH_RE = re.compile(r"^/(?P<cmd>\S+)")
 
 
 def _normalise(text: str) -> str:
-    """Lowercase, collapse whitespace, and drop a leading Telegram slash/mention.
+    """Lowercase, collapse whitespace, and drop a leading Telegram slash.
 
     Slashless input is returned unchanged, so Slack's pre-cleaned text (which
     never carries a slash) parses exactly as before.
     """
     text = text.strip()
-    m = _TELEGRAM_COMMAND_RE.match(text)
+    m = _TELEGRAM_SLASH_RE.match(text)
     if m:
         text = m.group("cmd") + text[m.end():]
     return " ".join(text.lower().split())

@@ -164,18 +164,6 @@ def test_slash_form_extracts_args():
     assert args == "on"
 
 
-@pytest.mark.parametrize("text", [
-    "/autoapprove@MyBot on",
-    "/autoapprove@mybot on",
-])
-def test_slash_form_strips_bot_mention(text):
-    """Groups send /cmd@BotName; Telegram matches on the token before '@'."""
-    spec, args = commands.parse_command(text)
-    assert spec is not None
-    assert spec.name == "autoapprove"
-    assert args == "on"
-
-
 @pytest.mark.parametrize("text,expected", [
     ("/AUTOAPPROVE ON", "autoapprove"),
     ("/autoapprove   on", "autoapprove"),
@@ -224,3 +212,60 @@ def test_autoapprove_slash_form_toggles_the_flag():
         assert not approvals.is_auto_approved(tid)
     finally:
         approvals.disable_auto_approve(tid)
+
+
+# ---------------------------------------------------------------------------
+# Platform command forms — pin the actual contract
+#
+#   Telegram: slash commands, NO bot mention.   "/autoapprove on"
+#   Slack:    bot mention, NO slash command.    "@bot autoapprove on"
+#             (bots/slack.py strips "<@U123>" before dispatch, so what
+#              reaches the registry is plain "autoapprove on")
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text,expected,args", [
+    ("/autoapprove on", "autoapprove", "on"),
+    ("/idle start", "idle", "start"),
+    ("/reasoning high", "reasoning", "high"),
+    ("/stop", "stop", ""),
+])
+def test_telegram_form_is_slash_without_mention(text, expected, args):
+    spec, got_args = commands.parse_command(text)
+    assert spec.name == expected
+    assert got_args == args
+
+
+@pytest.mark.parametrize("text,expected,args", [
+    ("autoapprove on", "autoapprove", "on"),
+    ("idle start", "idle", "start"),
+    ("reasoning high", "reasoning", "high"),
+    ("stop", "stop", ""),
+])
+def test_slack_form_after_mention_strip_is_plain_text(text, expected, args):
+    spec, got_args = commands.parse_command(text)
+    assert spec.name == expected
+    assert got_args == args
+
+
+def test_slack_mention_is_stripped_before_dispatch():
+    """The "<@U123>" mention removal that Slack performs before dispatch."""
+    import re
+    for raw, clean in [
+        ("<@U12345> autoapprove on", "autoapprove on"),
+        ("<@U999>  idle start ", "idle start"),
+    ]:
+        stripped = re.sub(r"<@[A-Z0-9]+>", "", raw).strip()
+        assert stripped == clean
+        assert commands.parse_command(stripped) is not None
+
+
+@pytest.mark.parametrize("text", [
+    "@mybot autoapprove on",
+    "@mybot /autoapprove on",
+])
+def test_mention_prefixed_text_is_not_a_command(text):
+    """Telegram does not take a mention; such text is an agent prompt, not a command.
+
+    It must fall through to the agent turn rather than being parsed here.
+    """
+    assert commands.parse_command(text) is None
