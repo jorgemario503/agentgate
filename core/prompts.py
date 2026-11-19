@@ -93,9 +93,15 @@ RESUME_TAIL_TURNS = 2
 #: blow the context budget.
 RESUME_MAX_CHARS = 4000
 
-#: Rendered when the history file cannot be read. Naming the path still helps:
-#: the model can try to read it itself.
+#: Rendered when the history file cannot be read (exists but is corrupt or
+#: unreadable). Naming the path still helps: the model can try to read it.
 _HISTORY_UNAVAILABLE = "(could not be read; read it directly if you need detail)"
+
+#: Rendered when there is simply no earlier history yet — a brand-new session,
+#: or a file holding nothing but the system message. This is the common case on
+#: a first turn, and it must not be reported as a read failure: telling the
+#: model "could not be read" sends it chasing a file that has nothing in it.
+_HISTORY_NONE = "(no earlier messages yet — this is the start of the conversation)"
 
 
 def _strip_comments(text: str) -> str:
@@ -174,19 +180,35 @@ def build_summary_prompt() -> str:
     return _section(SUMMARY_FILE, FALLBACK_SUMMARY)
 
 
-def _load_messages(history_path: str) -> list[dict]:
-    """Read the runner's history file, returning [] on any problem."""
+def _load_messages(history_path: str) -> tuple[list[dict], bool]:
+    """Read the runner's history file.
+
+    Returns ``(messages, unreadable)``. ``unreadable`` is True only when the
+    file exists but could not be turned into a message list (permission error,
+    invalid JSON, wrong top-level type) — a genuine fault worth telling the
+    model about. An absent file, or one that parses to an empty list, is not an
+    error: it just means there is no earlier history yet, and ``unreadable`` is
+    False. This distinction is what keeps a first turn from being reported as a
+    read failure.
+    """
+    path = Path(history_path)
+    if not path.exists():
+        return [], False
     try:
-        raw = Path(history_path).read_text()
+        raw = path.read_text()
     except OSError:
-        return []
+        return [], True
+    if not raw.strip():
+        # A zero-length or whitespace-only file is an unwritten history, not a
+        # corrupt one: a session that has been created but not yet saved.
+        return [], False
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
-        return []
+        return [], True
     if not isinstance(data, list):
-        return []
-    return [m for m in data if isinstance(m, dict)]
+        return [], True
+    return [m for m in data if isinstance(m, dict)], False
 
 
 def _turn_groups(messages: list[dict]) -> list[list[dict]]:
@@ -260,16 +282,21 @@ def build_resume_block(
         "",
     ]
 
-    messages = _load_messages(history_path)
+    messages, unreadable = _load_messages(history_path)
     turns = _turn_groups(messages)
     if not turns:
-        header.append(f"(The history file {_HISTORY_UNAVAILABLE})")
+        # No usable turns. Report a genuine read failure differently from a
+        # brand-new conversation, so the model is not sent to a file that has
+        # nothing to read.
+        note = _HISTORY_UNAVAILABLE if unreadable else _HISTORY_NONE
+        header.append(f"(The history file {note})")
         return "\n".join(header)
 
     digest = [_render_turn(t) for t in turns[-last_turns:]]
     rendered = "\n\n".join(d for d in digest if d)
     if not rendered:
-        header.append(f"(The history file {_HISTORY_UNAVAILABLE})")
+        # Turns exist but none carried visible text (e.g. only tool output).
+        header.append(f"(The history file {_HISTORY_NONE})")
         return "\n".join(header)
 
     if len(rendered) > max_chars:
