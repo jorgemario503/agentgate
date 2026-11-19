@@ -64,6 +64,27 @@ SLACK_BOT_TOKEN=xoxb-...
 SLACK_APP_TOKEN=xapp-...
 ```
 
+The app itself can be created from [`docs/slack-manifest.yaml`](docs/slack-manifest.yaml)
+(*Create New App → From an app manifest*). Its scopes are grouped into tiers —
+core, read-context, outbound, and broader/riskier — so you can delete the tiers
+you don't want before creating the app. Two things worth knowing:
+
+- **Conversation search needs a user token.** `search:read` is a user-token-only
+  scope; a bot token cannot grant it. Wanting the agent to search channels means
+  acting with the installer's permissions. Note that agentgate itself only reads
+  `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` — a user token is something the agent
+  would pick up from its own environment when it writes a script against the
+  Slack API, not a variable this project wires up.
+- **Scopes grant capability, not silent action.** Outbound pings still pass
+  through the approval gate, so the agent asks before messaging someone.
+
+The bot does not implement Slack-specific tools for search or file upload: with
+the scopes in place, the agent writes scripts using its existing Bash access,
+which keeps agentgate from duplicating Slack's API surface.
+
+`org_deploy_enabled` defaults to `false`. Enabling it without setting
+`ALLOWED_SLACK_USER_IDS` lets anyone in the workspace drive the agent.
+
 **WhatsApp:**
 ```
 WPPCONNECT_SERVER_URL=http://localhost:8082
@@ -169,13 +190,19 @@ conversation history is fully isolated.
 - `@bot approve <id>` · `@bot reject <id>` · `@bot autoapprove on|off`
 - `@bot reasoning off|low|medium|high` · `@bot reasoning show` · `@bot reasoning`
 
+> **The two platforms use different command forms — this is intentional.**
+> Telegram uses **slash commands with no mention** (`/autoapprove on`); Slack
+> uses **a bot mention with no slash** (`@bot autoapprove on`). Slack strips the
+> mention before dispatching, so both reach the same registry. WhatsApp does not
+> dispatch commands at all — it relays every message to the agent.
+
 ---
 
 ## Session lifecycle
 
 1. **First message** — a session starts. A workspace directory is created under `agent-sessions/<platform>/<id>/`.
 2. **Subsequent messages** — relayed to the same agent process.
-3. **Idle timeout** — sessions expire after `IDLE_TIMEOUT_SECONDS` (default: 2 hours). The session ID is preserved so the agent can resume from its last Claude transcript.
+3. **Idle timeout** — sessions expire after `IDLE_TIMEOUT_SECONDS` (default: 8 hours). The session ID is preserved so the agent can resume from its last Claude transcript.
 4. **`/stop`** — tears down the agent client immediately; next message starts fresh.
 
 ---
@@ -298,7 +325,14 @@ ADMIN_TELEGRAM_USER_IDS=123456789
 
 ALLOWED_SLACK_USER_IDS=U001,U002
 ADMIN_SLACK_USER_IDS=U001
+
+ALLOWED_WHATSAPP_USER_IDS=5511999999999
+ADMIN_WHATSAPP_USER_IDS=5511999999999
 ```
+
+Telegram identities can also use per-bot suffixes (`ALLOWED_TELEGRAM_USER_IDS_WORK`),
+which fall back to the unsuffixed vars when absent — see
+[Multiple Telegram bots](#multiple-telegram-bots).
 
 Admins can approve/reject AgentDB skill proposals and toggle auto-approval.
 
@@ -372,6 +406,9 @@ agentgate/
 ├── run.py                # launch one or more bots as subprocesses
 ├── permissions.yaml      # AgentDB write permissions (generic examples)
 │
+├── docs/
+│   └── slack-manifest.yaml   # Slack app manifest — tiered, commented scopes
+│
 ├── bots/
 │   ├── slack.py          # Slack @mention bot
 │   ├── telegram.py       # Telegram private-chat bot
@@ -380,14 +417,21 @@ agentgate/
 ├── runners/
 │   ├── base.py           # Runner protocol + shared types
 │   ├── claude.py         # Claude Agent SDK runner
+│   ├── claude_reasoning.py  # Claude thinking/effort mapping
+│   ├── deepinfra.py      # DeepInfra runner
 │   ├── fireworks.py      # Fireworks (Kimi K2, etc.) runner
 │   └── local.py          # OpenAI-compatible local server runner (Ollama, MLX, llama.cpp)
 │
 ├── core/
 │   ├── config.py         # all env var loading + validation
+│   ├── providers.py      # declarative provider specs + config precedence
 │   ├── sessions.py       # session store + idle reaper
 │   ├── approvals.py      # async approval/answer gate
-│   └── commands.py       # platform-agnostic command layer
+│   ├── agentdb.py        # AgentDB integration surface
+│   ├── commands.py       # platform-agnostic command layer
+│   └── reasoning/        # reasoning-parameter registry + resolution
+│       ├── registry.py
+│       └── resolve.py
 │
 └── tests/
 ```
