@@ -286,3 +286,73 @@ def test_whatsapp_uses_its_module_level_runner():
     source = inspect.getsource(whatsapp.handle_message)
     assert "wants_claude_settings(_runner)" in source
     assert "wants_claude_settings(runner)" not in source
+
+
+# -- every runner, including Claude, reads prompts/ ------------------------
+
+
+def test_claude_appends_the_hard_rules_file(monkeypatch, tmp_path):
+    """Claude used core.config.SYSTEM_PROMPT directly, bypassing prompts/.
+
+    Editing prompts/hard_rules.md must reach Claude too, otherwise the two
+    copies drift and Claude users silently keep the older rules.
+    """
+    import inspect
+
+    import runners.claude as claude
+
+    source = inspect.getsource(claude)
+    assert "SYSTEM_PROMPT" not in source.split("system_prompt=")[1][:400], (
+        "Claude still appends the core.config constant instead of the file"
+    )
+    assert "build_hard_rules" in source or "build_base_prompt" in source
+
+
+def test_hard_rules_file_is_the_single_source(monkeypatch):
+    """build_hard_rules() returns the file body, so every runner agrees."""
+    body = prompts.build_hard_rules()
+    shipped = _strip_header((Path("prompts") / prompts.HARD_RULES_FILE).read_text())
+    assert body == shipped
+
+
+def test_hard_rules_falls_back_when_file_absent(tmp_path, monkeypatch):
+    monkeypatch.setattr(prompts, "PROMPT_DIR", tmp_path / "nope", raising=True)
+    monkeypatch.delenv(prompts.PROMPT_ENV, raising=False)
+    rules = prompts.build_hard_rules()
+    assert "never violate these under any circumstances" in rules
+
+
+# -- resume.md is a real prompt file like the others -----------------------
+
+
+def test_resume_file_is_shipped_and_active():
+    """resume.md must exist and be loaded, not sit as a .example template."""
+    assert (Path("prompts") / prompts.RESUME_FILE).exists(), "prompts/resume.md missing"
+    assert not (Path("prompts") / (prompts.RESUME_FILE + ".example")).exists(), (
+        "the .example template is redundant once resume.md ships"
+    )
+
+
+def test_resume_file_body_is_what_is_injected(tmp_path, monkeypatch):
+    monkeypatch.setattr(prompts, "PROMPT_DIR", Path("prompts"), raising=True)
+    monkeypatch.delenv(prompts.PROMPT_ENV, raising=False)
+    body = _strip_header((Path("prompts") / prompts.RESUME_FILE).read_text())
+    block = prompts.build_resume_block("/tmp/h.json", "/ws")
+    assert body in block
+    assert prompts.SECTION_HEADINGS["resume"] in block
+
+
+def test_resume_falls_back_when_file_absent(tmp_path, monkeypatch):
+    monkeypatch.setattr(prompts, "PROMPT_DIR", tmp_path / "nope", raising=True)
+    monkeypatch.delenv(prompts.PROMPT_ENV, raising=False)
+    block = prompts.build_resume_block("/tmp/h.json", "/ws")
+    assert "Do not greet the" in block
+
+
+def test_every_prompt_surface_shares_the_same_fallback_mechanism():
+    """Each surface resolves through _section() with a named fallback."""
+    import inspect
+
+    source = inspect.getsource(prompts)
+    for name in ("FALLBACK_BASE", "FALLBACK_HARD_RULES", "FALLBACK_RESUME", "FALLBACK_SUMMARY"):
+        assert f"{name} =" in source, f"{name} is not a named constant"

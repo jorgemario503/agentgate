@@ -244,6 +244,7 @@ overridden without editing source. Drop a file in `prompts/` — or point
 | `base.md` | the workflow prompt (tool list, inspection preferences) |
 | `hard_rules.md` | the security instructions |
 | `resume.md` | the opening lines of the resume block |
+| `summary.md` | the compaction summariser's instructions |
 
 ```bash
 cp prompts/base.md prompts/base.md   # already shipped; edit your copy
@@ -251,9 +252,11 @@ export AGENTGATE_PROMPTS_DIR=/path/to/my-prompts
 ```
 
 A missing, empty, or unreadable file falls back to the built-in text — an
-override can never blank the prompt. `prompts/` ships `base.md`,
-`hard_rules.md` and `summary.md`; `resume.md` ships as `.example` so only its
-opening text is optional.
+override can never blank the prompt. All four files ship and are active.
+
+**Every runner reads these files**, including Claude: `hard_rules.md` is
+appended to Claude's preset prompt as well as to the non-Claude base prompt,
+so one edit reaches all backends.
 
 Each file documents its own conventions at the top. The short version: leading
 `#` comments are stripped and never reach the model; the section heading is

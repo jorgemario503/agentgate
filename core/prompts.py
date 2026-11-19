@@ -26,7 +26,7 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
-from core.config import SYSTEM_PROMPT
+from core.config import SYSTEM_PROMPT as _CONFIG_SYSTEM_PROMPT
 from core.sessions import SessionState
 
 #: Where the prompt files live, and the variable that can relocate them.
@@ -64,6 +64,18 @@ FALLBACK_BASE = (
     "lookup_directory / remember_directory. Prefer Read/Glob/Grep for inspection "
     "and Edit for surgical changes; use Bash for everything else. When you refer to "
     "a directory by name, call lookup_directory first before searching."
+)
+
+#: Fallback hard rules. The authoritative copy is prompts/hard_rules.md; this
+#: is `core.config.SYSTEM_PROMPT`, kept only so a deleted file still yields
+#: working rules. Claude and the stateless runners both read the file, so they
+#: cannot drift apart.
+FALLBACK_HARD_RULES = _CONFIG_SYSTEM_PROMPT
+
+#: Fallback opening lines for the resume block.
+FALLBACK_RESUME = (
+    "You are continuing a conversation that started earlier. Do not greet the\n"
+    "user or re-introduce yourself."
 )
 
 FALLBACK_SUMMARY = (
@@ -139,8 +151,18 @@ def build_base_prompt() -> str:
     file falls back to the built-in text.
     """
     base = _section(BASE_FILE, FALLBACK_BASE)
-    rules = _section(HARD_RULES_FILE, SYSTEM_PROMPT)
+    rules = build_hard_rules()
     return f"{_heading('base')}\n{base}\n\n{_heading('hard_rules')}\n{rules}"
+
+
+def build_hard_rules() -> str:
+    """The hard rules, from prompts/hard_rules.md.
+
+    Shared by every runner: the Claude runner appends these to its preset
+    prompt, and the stateless runners include them in the base prompt. One
+    file means one edit reaches all of them.
+    """
+    return _section(HARD_RULES_FILE, FALLBACK_HARD_RULES)
 
 
 def build_summary_prompt() -> str:
@@ -224,11 +246,7 @@ def build_resume_block(
     Never raises. If the history cannot be read, the path is still named so the
     model can fetch it.
     """
-    intro_body = _section(
-        RESUME_FILE,
-        "You are continuing a conversation that started earlier. Do not greet the\n"
-        "user or re-introduce yourself.",
-    )
+    intro_body = _section(RESUME_FILE, FALLBACK_RESUME)
     header = [
         f"{_heading('resume')}\n{intro_body}",
         "",

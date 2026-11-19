@@ -38,8 +38,8 @@ from core.config import (
     AGENTDB_ENABLED,
     BLOCKED_PATTERNS,
     SDK_ALLOWED_TOOLS,
-    SYSTEM_PROMPT,
 )
+from core.prompts import build_hard_rules
 from runners.base import (
     PlatformConfig, TaskInterrupted, check_blocked,
     _describe_ask_user_question, _resolve_ask_user_answer, _describe_tool_call,
@@ -385,7 +385,7 @@ class ClaudeRunner:
             system_prompt={
                 "type": "preset",
                 "preset": "claude_code",
-                "append": SYSTEM_PROMPT,
+                "append": build_hard_rules(),
             },
             setting_sources=["project"],
             add_dirs=ADDITIONAL_DIRS,
