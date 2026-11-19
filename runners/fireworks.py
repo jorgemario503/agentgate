@@ -37,6 +37,7 @@ from core.config import (
     SYSTEM_PROMPT,
 )
 from core.agentdb import AgentDBSurface
+from core.prompts import apply_system_prompt
 from core.providers import settings_for
 from core.reasoning import (
     build_request_kwargs,
@@ -518,9 +519,9 @@ class FireworksAgentClient:
         self.on_compact = on_compact
 
     async def connect(self) -> None:
-        self.messages = self.session_store.load(self.session_id)
-        if self.system_prompt and not any(m.get("role") == "system" for m in self.messages):
-            self.messages.insert(0, {"role": "system", "content": self.system_prompt})
+        self.messages = apply_system_prompt(
+            self.session_store.load(self.session_id), self.system_prompt
+        )
 
     async def query(self, prompt: str, ephemeral_context: Optional[str] = None) -> None:
         self.messages.append({"role": "user", "content": prompt})
