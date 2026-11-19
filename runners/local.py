@@ -120,14 +120,8 @@ class SessionStore(ABC):
 class JsonFileSessionStore(JsonFileHistoryStore, SessionStore):
     """Persisted message history for one runner (see core.history)."""
 
-    def __init__(
-        self,
-        directory: str | Path = "./local_sessions",
-        legacy_directory: str | Path | None = None,
-    ):
-        JsonFileHistoryStore.__init__(
-            self, directory=directory, legacy_directory=legacy_directory
-        )
+    def __init__(self, directory: str | Path = "./local_sessions"):
+        JsonFileHistoryStore.__init__(self, directory=directory)
 
 
 # ---------------------------------------------------------------------------

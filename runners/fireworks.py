@@ -165,14 +165,8 @@ class SessionStore(ABC):
 class JsonFileSessionStore(JsonFileHistoryStore, SessionStore):
     """Persisted message history for one runner (see core.history)."""
 
-    def __init__(
-        self,
-        directory: str | Path = "./fw_sessions",
-        legacy_directory: str | Path | None = None,
-    ):
-        JsonFileHistoryStore.__init__(
-            self, directory=directory, legacy_directory=legacy_directory
-        )
+    def __init__(self, directory: str | Path = "./fw_sessions"):
+        JsonFileHistoryStore.__init__(self, directory=directory)
 
 
 # ---------------------------------------------------------------------------
@@ -1078,7 +1072,7 @@ class FireworksRunner:
             return self._clients[thread_id]
 
         store = platform.session_store
-        history_store = JsonFileSessionStore.for_runner(store.base, self.name, legacy_name="fw_history")
+        history_store = JsonFileSessionStore.for_runner(store.base, self.name)
         system_prompt = f"{_BASE_SYSTEM_PROMPT}\n\n{SYSTEM_PROMPT}"
 
         # Local models can't call agentdb tools mid-turn, so pre-load memory
