@@ -25,9 +25,10 @@ wppconnect-server API endpoints used by this file:
         { "event": "onmessage", "session": "...",
           "data": { "from": "5511999999999@c.us", "body": "...", "isGroupMsg": false } }
 
-Run from a shell with `claude` on PATH (or with --fireworks/--ollama/--mlx):
+Run from a shell with `claude` on PATH (or with --deepinfra/--fireworks/--ollama/--mlx):
     python -m bots.whatsapp
     python -m bots.whatsapp --ollama --model qwen3:14b
+    python -m bots.whatsapp --port 9090
 """
 from __future__ import annotations
 
@@ -315,13 +316,22 @@ if __name__ == "__main__":
         description="WhatsApp linked-device bot that remote-controls a local coding agent."
     )
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--claude", dest="backend", action="store_const", const="claude")
-    group.add_argument("--deepinfra", dest="backend", action="store_const", const="deepinfra")
-    group.add_argument("--fireworks", dest="backend", action="store_const", const="fireworks")
-    group.add_argument("--ollama", dest="backend", action="store_const", const="ollama")
-    group.add_argument("--mlx", dest="backend", action="store_const", const="mlx")
-    parser.add_argument("--model", dest="model", default=None)
-    parser.add_argument("--port", dest="port", type=int, default=PORT)
+    group.add_argument("--claude", dest="backend", action="store_const", const="claude",
+                       help="Use the Claude Agent SDK backend (default).")
+    group.add_argument("--deepinfra", dest="backend", action="store_const", const="deepinfra",
+                       help="Use the DeepInfra backend.")
+    group.add_argument("--fireworks", dest="backend", action="store_const", const="fireworks",
+                       help="Use the Fireworks backend.")
+    group.add_argument("--ollama", dest="backend", action="store_const", const="ollama",
+                       help="Use a local Ollama server.")
+    group.add_argument("--mlx", dest="backend", action="store_const", const="mlx",
+                       help="Use a local MLX server.")
+    parser.add_argument("--model", dest="model", default=None,
+                        help="Model name override (for --deepinfra/--fireworks/--ollama/--mlx).")
+    parser.add_argument("--port", dest="port", type=int, default=PORT,
+                        help=f"Port this bot's webhook server listens on (default: {PORT}). "
+                             f"Also changes the default webhook URL advertised to "
+                             f"wppconnect-server.")
     parser.set_defaults(backend="claude")
     args = parser.parse_args()
 
@@ -329,6 +339,12 @@ if __name__ == "__main__":
         os.environ["WHATSAPP_BACKEND"] = args.backend
     if args.model:
         os.environ["WHATSAPP_MODEL"] = args.model
+    # Port must go through the env var the module reads at import time:
+    # uvicorn re-imports bots.whatsapp, and WPPCONNECT_WEBHOOK_URL is derived
+    # from PORT. Setting only the local `port=` would bind uvicorn to the new
+    # port while still registering the webhook against the old one.
+    if args.port != PORT:
+        os.environ["WHATSAPP_LINKED_PORT"] = str(args.port)
 
     uvicorn.run(
         "bots.whatsapp:app",

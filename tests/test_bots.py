@@ -123,3 +123,34 @@ def test_whatsapp_handle_message_blocks_unauthorized(monkeypatch):
 
     asyncio.run(run())
     assert any("not authorized" in m[1].lower() for m in sent)
+
+
+def test_whatsapp_port_override_updates_derived_webhook_url(monkeypatch):
+    """--port must propagate to WPPCONNECT_WEBHOOK_URL.
+
+    The webhook URL is derived from PORT at import time, and uvicorn re-imports
+    the module. Writing only uvicorn's port= would bind the server on one port
+    while advertising the webhook on another, so inbound messages never arrive.
+    """
+    import importlib
+    monkeypatch.delenv("WPPCONNECT_WEBHOOK_URL", raising=False)
+    monkeypatch.setenv("WHATSAPP_LINKED_PORT", "9090")
+    from bots import whatsapp as wbot
+    importlib.reload(wbot)
+    assert wbot.PORT == 9090
+    assert wbot.WPPCONNECT_WEBHOOK_URL == "http://localhost:9090/webhook"
+    monkeypatch.delenv("WHATSAPP_LINKED_PORT", raising=False)
+    importlib.reload(wbot)
+
+
+def test_whatsapp_explicit_webhook_url_wins_over_port(monkeypatch):
+    """An explicit WPPCONNECT_WEBHOOK_URL (e.g. an ngrok URL) is not overridden."""
+    import importlib
+    monkeypatch.setenv("WHATSAPP_LINKED_PORT", "9090")
+    monkeypatch.setenv("WPPCONNECT_WEBHOOK_URL", "https://abc.ngrok.io/webhook")
+    from bots import whatsapp as wbot
+    importlib.reload(wbot)
+    assert wbot.WPPCONNECT_WEBHOOK_URL == "https://abc.ngrok.io/webhook"
+    monkeypatch.delenv("WHATSAPP_LINKED_PORT", raising=False)
+    monkeypatch.delenv("WPPCONNECT_WEBHOOK_URL", raising=False)
+    importlib.reload(wbot)
