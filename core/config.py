@@ -161,6 +161,12 @@ CLAUDE_SETTINGS = {
 
 # -------------------------
 # SECURITY LAYER 4 — system prompt appended to every session
+#
+# This is the text the Claude runner appends (runners/claude.py). The
+# non-Claude runners read prompts/hard_rules.md instead, falling back to this
+# string only when that file is missing or empty. If you change the rules,
+# change prompts/hard_rules.md and keep this in step: Claude users only ever
+# see the copy below.
 # -------------------------
 SYSTEM_PROMPT = """
 You are a coding assistant working inside a local directory.

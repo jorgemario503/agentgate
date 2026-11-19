@@ -29,19 +29,9 @@ from typing import Any, Optional
 from core.config import SYSTEM_PROMPT
 from core.sessions import SessionState
 
-#: Copy of the non-Claude runners' base prompt. Kept verbatim so moving the
-#: string here does not change what existing sessions see.
-BASE_SYSTEM_PROMPT = (
-    "You are a coding assistant operating in a local workspace via tools. "
-    "Available tools: Bash (shell), Read, Write, Edit, Glob, Grep, and "
-    "lookup_directory / remember_directory. Prefer Read/Glob/Grep for inspection "
-    "and Edit for surgical changes; use Bash for everything else. When you refer to "
-    "a directory by name, call lookup_directory first before searching."
-)
-
-#: Where user-editable prompt overrides live, and the variable that can
-#: relocate them. Read at call time so an operator can drop a file in without
-#: touching source, and so tests can point it elsewhere.
+#: Where the prompt files live, and the variable that can relocate them.
+#: Read at call time so an operator can edit a file without touching source,
+#: and so tests can point it elsewhere.
 PROMPT_DIR = Path("prompts")
 PROMPT_ENV = "AGENTGATE_PROMPTS_DIR"
 
@@ -63,23 +53,25 @@ SECTION_HEADINGS = {
     "summary": "## Summarisation instructions",
 }
 
-#: Built-in summariser prompt. This governs the compaction summary, not the
-#: agent, so it carries no security guarantee and is safe to ship as an
-#: active default. The three runners used to carry their own copies and had
-#: already drifted apart.
-SUMMARY_PROMPT = (
+#: Minimal fallbacks, used only when the corresponding file is absent, empty
+#: or unreadable. The shipped files under `prompts/` are the real definitions;
+#: these exist so a deleted file degrades to working defaults rather than to
+#: an empty prompt. Keep them short and in sync with the files' intent, not
+#: with their exact wording.
+FALLBACK_BASE = (
+    "You are a coding assistant operating in a local workspace via tools. "
+    "Available tools: Bash (shell), Read, Write, Edit, Glob, Grep, and "
+    "lookup_directory / remember_directory. Prefer Read/Glob/Grep for inspection "
+    "and Edit for surgical changes; use Bash for everything else. When you refer to "
+    "a directory by name, call lookup_directory first before searching."
+)
+
+FALLBACK_SUMMARY = (
     "You are condensing an earlier portion of an ongoing coding-agent "
-    "conversation so it can be removed from the live context. Preserve "
-    "all information needed to continue the conversation correctly, "
-    "including: user goals and constraints; decisions made and the "
-    "reasoning behind them when it affects future work; concrete facts "
-    "(file paths, function names, class names, APIs, identifiers, URLs, "
-    "numbers, versions, commands, errors, and configuration values); "
-    "code changes already made; remaining tasks, open questions, and known "
-    "issues. Omit routine tool chatter, acknowledgements, repeated "
-    "information, and other conversational filler. Be concise, but do not "
-    "sacrifice important technical detail for brevity. Write plain prose "
-    "with no headings or preamble."
+    "conversation so it can be removed from the live context. Preserve user "
+    "goals, decisions and their reasoning, concrete technical facts, code "
+    "changes, remaining tasks and open questions. Omit chatter and repeated "
+    "information. Write plain prose with no headings or preamble."
 )
 
 #: How many trailing turns the resume block replays inline.
@@ -146,7 +138,7 @@ def build_base_prompt() -> str:
     section can be overridden via `PROMPT_DIR`; a missing, empty, or unreadable
     file falls back to the built-in text.
     """
-    base = _section(BASE_FILE, BASE_SYSTEM_PROMPT)
+    base = _section(BASE_FILE, FALLBACK_BASE)
     rules = _section(HARD_RULES_FILE, SYSTEM_PROMPT)
     return f"{_heading('base')}\n{base}\n\n{_heading('hard_rules')}\n{rules}"
 
@@ -157,7 +149,7 @@ def build_summary_prompt() -> str:
     Centralised here with the other prompt surfaces; the three runners used to
     keep drifting copies. Overridable like the rest.
     """
-    return _section(SUMMARY_FILE, SUMMARY_PROMPT)
+    return _section(SUMMARY_FILE, FALLBACK_SUMMARY)
 
 
 def _load_messages(history_path: str) -> list[dict]:

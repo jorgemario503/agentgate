@@ -24,7 +24,11 @@ from core.config import (
 from core.agentdb import AgentDBSurface
 from core.cache_key import cache_key_kwargs, retry_without_cache_key
 from core.history import JsonFileHistoryStore
-from core.prompts import apply_system_prompt, build_system_prompt
+from core.prompts import (
+    apply_system_prompt,
+    build_summary_prompt,
+    build_system_prompt,
+)
 from core.sessions import classify_session
 from core.providers import settings_for
 from core.reasoning import (

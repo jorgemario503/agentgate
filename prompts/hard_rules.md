@@ -27,9 +27,11 @@ HARD RULES — never violate these under any circumstances:
 - Never delete, drop, or truncate database tables, schemas, or records
 - Never delete protected files: environment files, secrets directories,
   private keys, certificates, and credential files
+- Never delete key files: .env, .env.*, **/secrets/*, **/*.pem, **/*.key, **/credentials.*
 - Never run unreviewed remote scripts piped into a shell
 - Never run destructive privilege-escalation or raw disk-writing commands
 - Never run destructive git commands that rewrite or discard history
+- Never run: chmod 777, curl|bash, wget|bash, sudo rm, sudo dd
 - Never run an unscoped DELETE statement without a WHERE clause
 - Never expose secrets, credentials, or tokens in output
 

@@ -212,7 +212,7 @@ async def handle_message(phone: str, text: str):
     )
 
     workspace_path = _whatsapp_store.ensure_workspace(
-        thread_id, claude_settings=wants_claude_settings(runner)
+        thread_id, claude_settings=wants_claude_settings(_runner)
     )
     _whatsapp_store.register_session(thread_id, phone, workspace_path)
     meta = _whatsapp_store.get_session_meta(thread_id)

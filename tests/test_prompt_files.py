@@ -223,3 +223,66 @@ def _strip_header(text: str) -> str:
     while i < len(lines) and (lines[i].lstrip().startswith("#") or not lines[i].strip()):
         i += 1
     return "\n".join(lines[i:]).strip()
+
+
+# -- the shipped files are the source of truth -----------------------------
+
+
+def test_shipped_base_is_used_verbatim(tmp_path, monkeypatch):
+    """With no override dir, the shipped file's body is what reaches the model."""
+    monkeypatch.setattr(prompts, "PROMPT_DIR", Path("prompts"), raising=True)
+    monkeypatch.delenv(prompts.PROMPT_ENV, raising=False)
+    body = _strip_header((Path("prompts") / prompts.BASE_FILE).read_text())
+    assert body in prompts.build_base_prompt()
+
+
+def test_shipped_hard_rules_are_used_verbatim(tmp_path, monkeypatch):
+    """The shipped hard rules win over the built-in fallback text."""
+    monkeypatch.setattr(prompts, "PROMPT_DIR", Path("prompts"), raising=True)
+    monkeypatch.delenv(prompts.PROMPT_ENV, raising=False)
+    body = _strip_header((Path("prompts") / prompts.HARD_RULES_FILE).read_text())
+    built = prompts.build_base_prompt()
+    assert body in built
+    # The older built-in text must not be appended as well.
+    assert "Never delete, drop, or truncate database tables" in built
+    assert built.count("HARD RULES — never violate") == 1
+
+
+def test_shipped_summary_is_used_verbatim(tmp_path, monkeypatch):
+    monkeypatch.setattr(prompts, "PROMPT_DIR", Path("prompts"), raising=True)
+    monkeypatch.delenv(prompts.PROMPT_ENV, raising=False)
+    body = _strip_header((Path("prompts") / prompts.SUMMARY_FILE).read_text())
+    assert prompts.build_summary_prompt() == body
+
+
+# -- regressions caught by static analysis, not by behaviour tests ---------
+
+
+def test_runners_import_every_prompt_builder_they_call():
+    """A missing import is a NameError at first use, invisible to unit tests.
+
+    build_summary_prompt() was called in all three runners without being
+    imported; the summariser only runs on a long conversation, so nothing
+    exercised it. Check the call sites resolve.
+    """
+    from runners import deepinfra, fireworks, local
+
+    for module in (local, fireworks, deepinfra):
+        assert callable(module.build_summary_prompt), module.__name__
+        assert callable(module.build_system_prompt), module.__name__
+        assert callable(module.apply_system_prompt), module.__name__
+
+
+def test_whatsapp_uses_its_module_level_runner():
+    """WhatsApp keeps its runner in `_runner`; `runner` is not in scope there.
+
+    Referencing an undefined name in a handler only fails on the first real
+    message, which no unit test covers.
+    """
+    import inspect
+
+    import bots.whatsapp as whatsapp
+
+    source = inspect.getsource(whatsapp.handle_message)
+    assert "wants_claude_settings(_runner)" in source
+    assert "wants_claude_settings(runner)" not in source
