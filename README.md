@@ -87,10 +87,23 @@ python run.py --slack --telegram
 python run.py --telegram fireworks
 python run.py --telegram ollama
 python run.py --telegram ollama surfer qwen3:14b
+python run.py --slack deepinfra
+python run.py --slack deepinfra deepinfra/Qwen/Qwen3-235B-A22B
+python run.py --whatsapp ollama qwen3:14b
 
 # See all configured Telegram identities
 python run.py --list-bots
 ```
+
+Positional grammar differs per channel, because only Telegram has bot identities:
+
+| Command | Shape |
+|---|---|
+| `--slack` | `[runner] [model]` |
+| `--whatsapp` | `[runner] [model]` |
+| `--telegram` | `[runner] [bot_id] [model]` |
+
+`runner` is one of `claude` (default), `deepinfra`, `fireworks`, `ollama`, `mlx`.
 
 Or run a bot directly:
 ```bash

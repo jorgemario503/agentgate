@@ -411,7 +411,7 @@ if __name__ == "__main__":
     group.add_argument("--claude", dest="backend", action="store_const", const="claude",
                        help="Use the Claude Agent SDK backend (default).")
     group.add_argument("--deepinfra", dest="backend", action="store_const", const="deepinfra",
-                       help="Use the Fireworks backend.")
+                       help="Use the DeepInfra backend.")
     group.add_argument("--fireworks", dest="backend", action="store_const", const="fireworks",
                        help="Use the Fireworks backend.")
     group.add_argument("--ollama", dest="backend", action="store_const", const="ollama",
