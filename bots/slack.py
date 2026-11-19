@@ -28,7 +28,7 @@ from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 import core.approvals as approvals
 import core.commands as commands
 import core.config as config
-from core.sessions import SessionStore
+from core.sessions import SessionStore, classify_session
 from runners.base import PlatformConfig, TaskInterrupted, check_blocked
 
 CHUNK = 3800  # Slack hard limit is 4000; leave headroom
@@ -283,8 +283,10 @@ def _register_handlers(platform: PlatformConfig):
             await _post(channel, thread_id, "⚠️ No active session. Mention me with a task to start one.")
             return
 
-        prior_session_id = meta.get("session_id") if meta else None
-        start_msg = "🔄 Resuming session" if prior_session_id else "🚀 Starting agent session"
+        # Derived from registry state, not session_id: the stateless runners
+        # keep session_id unset or equal to thread_id, so it cannot tell a
+        # resume from a fresh start.
+        start_msg = classify_session(meta, False).opener
         await _post(
             channel, thread_id,
             f"{start_msg}...\n"

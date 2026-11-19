@@ -27,7 +27,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, ContextTyp
 import core.approvals as approvals
 import core.commands as commands
 import core.config as config
-from core.sessions import SessionStore
+from core.sessions import SessionStore, classify_session
 from runners.base import PlatformConfig, TaskInterrupted, check_blocked
 
 # ---------------------------------------------------------------------------
@@ -227,8 +227,10 @@ async def _dispatch(runner, chat_id, thread_id, context, prompt, message_id):
         )
         return
 
-    prior_session_id = meta.get("session_id") if meta else None
-    start_msg = "🔄 Resuming session" if prior_session_id else "🚀 Starting agent session"
+    # Derived from registry state, not session_id: the stateless runners
+    # keep session_id unset or equal to thread_id, so it cannot tell a
+    # resume from a fresh start.
+    start_msg = classify_session(meta, False).opener
     await _post(
         context, chat_id,
         f"{start_msg}...\n"

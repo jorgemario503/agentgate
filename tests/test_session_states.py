@@ -120,3 +120,33 @@ def test_history_reloads_for_existing_thread(tmp_path):
     asyncio.run(client.connect())
     contents = [m.get("content") for m in client.messages]
     assert "q5" in contents and "a5" in contents
+
+
+# -- opener shown to the user ----------------------------------------------
+
+
+def test_opener_uses_registry_state_not_session_id():
+    """S7: a resumed non-Claude thread must say "Resuming".
+
+    The bots used `prior_session_id` to choose the opener. The stateless
+    runners always set session_id to thread_id (or leave it None), so a
+    genuine resume was announced as a fresh start.
+    """
+    # An expired row is a resume even though session_id may be None.
+    expired = classify_session(meta(session_id=None, expired=True), has_client=False)
+    assert "Resuming" in expired.opener
+
+    # No row at all is genuinely new.
+    assert "Starting" in classify_session(None, has_client=False).opener
+
+
+def test_bot_opener_matches_the_state_function():
+    """The bots must derive the opener from classify_session."""
+    import inspect
+
+    for module_path in ("bots/slack.py", "bots/telegram.py", "bots/whatsapp.py"):
+        source = inspect.getsource(__import__(module_path.replace("/", ".")[:-3], fromlist=["x"]))
+        assert "classify_session" in source, f"{module_path} does not use classify_session"
+        assert 'prior_session_id' not in source, (
+            f"{module_path} still keys the opener off session_id"
+        )
