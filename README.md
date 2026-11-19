@@ -265,8 +265,8 @@ Allowlists fail **open** when empty; admin lists fail **closed**.
 Sessions expire after `IDLE_TIMEOUT_SECONDS` (default 8h) of inactivity.
 
 ```
-/idle start   # the reaper will skip this chat
-/idle stop    # restore normal expiry
+/idle start   # restore normal expiry
+/idle stop    # the reaper will skip this chat
 /idle         # show current state
 ```
 
