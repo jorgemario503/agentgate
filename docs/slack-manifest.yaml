@@ -1,0 +1,160 @@
+# =============================================================================
+# AgentGate — Slack app manifest
+# =============================================================================
+#
+# HOW TO READ THIS FILE
+#   Scopes are grouped into tiers. Every scope is commented with what it
+#   enables and what it costs. Delete/comment out any tier you do not want,
+#   then create the app from this file at https://api.slack.com/apps
+#   ("Create New App" -> "From an app manifest").
+#
+#   Changing scopes later requires REINSTALLING the app to the workspace.
+#
+# PERSONAL vs ORG LEVEL
+#   PERSONAL  — install only to your own workspace, keep sockets + private
+#               channels. Lower blast radius; the bot acts as you-ish.
+#   ORG LEVEL — deploy org-wide (org_deploy_enabled: true) and grant the
+#               broader scopes. Only do this with the admin/allowlist vars in
+#               .env actually set (ALLOWED_SLACK_USER_IDS, ADMIN_SLACK_USER_IDS),
+#               otherwise anyone in the org can drive the agent.
+#
+# IMPORTANT — USER TOKEN
+#   Channel *search* (conversations.search) is only available to USER tokens;
+#   it cannot be granted to a bot token. If you want the bot to search
+#   conversations, you MUST enable the `user:` scope block and set
+#   SLACK_USER_TOKEN. That means the bot can act with YOUR permissions.
+#   Delete the user: block if you only want bot-identity acting.
+#
+# OUTBOUND ACTIONS ARE STILL GATED
+#   Scopes grant the *capability*, not the *permission to use it silently*.
+#   runners/claude.py routes every tool call through the approval gate, so
+#   pinging someone / posting to another channel still asks you first unless
+#   you /autoapprove. Keep that gate on for org-level installs.
+# =============================================================================
+
+display_information:
+  name: agent-name
+  description: Gateway between Slack and a local AI coding agent.
+
+features:
+  app_home:
+    # Messages tab must be on: the bot replies in threads there.
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: agent-name
+    always_online: true
+
+  # ---------------------------------------------------------------------------
+  # OPTIONAL — Slack "Agents" / assistant pane (suggested prompts, thread
+  # titles). This bot does NOT implement the assistant API, so leaving this on
+  # adds UI surface with no behavior behind it. Safe to omit entirely.
+  # ---------------------------------------------------------------------------
+  # agent_view:
+  #   suggested_prompts: []
+
+oauth_config:
+  scopes:
+
+    # -------------------------------------------------------------------------
+    # USER SCOPES — only if you want the bot to SEARCH conversations and to
+    # see channels it was never invited to. Requires SLACK_USER_TOKEN.
+    # Everything here runs with YOUR access rights. Omit this whole block for
+    # a bot-identity-only install.
+    # -------------------------------------------------------------------------
+    user:
+      # REQUIRED for conversation/channel search — no bot equivalent exists.
+      - search:read
+      # Let search results include private channels / DMs / group DMs you can
+      # read. Drop these three to keep the bot out of private conversations.
+      - channels:history
+      - groups:history
+      - im:history
+      - mpim:history
+
+    bot:
+      # -----------------------------------------------------------------------
+      # TIER 1 — CORE. Required for the bot to function at all.
+      # -----------------------------------------------------------------------
+      - app_mentions:read     # receive @mentions (the only event handler today)
+      - chat:write            # post replies in threads
+      - reactions:write       # working/slow reaction markers
+      - files:read            # download image/PDF attachments sent to it
+
+      # -----------------------------------------------------------------------
+      # TIER 2 — READ CONTEXT. Lets the agent read conversation history so it
+      # can answer "what was decided above?" without you pasting it all in.
+      # Remove if you want the bot to only ever see the mention it was sent.
+      # -----------------------------------------------------------------------
+      - channels:history      # public channel message history
+      - channels:read         # list public channels (needed to search / pick one)
+      - groups:history        # private channel history (bot must be a member)
+      - groups:read           # list private channels the bot is in
+      - im:history            # DM history with the bot
+      - mpim:history          # group DM history the bot is in
+
+      # -----------------------------------------------------------------------
+      # TIER 3 — OUTBOUND / ACT ON YOUR BEHALF. This is what enables pinging
+      # other people and starting conversations, with the bot as the author.
+      # Remove this tier to keep the bot purely reactive in-thread.
+      # -----------------------------------------------------------------------
+      - chat:write.public     # post in channels the bot was NOT invited to
+      - im:write              # open a DM with a user (to ping them)
+      - mpim:write            # open / post in group DMs
+      - files:write           # upload/share files, not just download
+      - users:read            # resolve user IDs <-> names for @mentions
+
+      # -----------------------------------------------------------------------
+      # TIER 4 — BROADER / RISKIER. Only for org-level installs where you have
+      # explicitly decided the tradeoff. Each line explains the risk.
+      # -----------------------------------------------------------------------
+      - chat:write.customize  # post with ANY username/avatar — makes bot
+                              # messages indistinguishable from a human. Big
+                              # impersonation risk; leave off unless needed.
+      - commands              # enable /slash commands in Slack (optional; the
+                              # registry currently dispatches from @mentions)
+      - team:read             # workspace name/domain metadata (mild)
+      - links:read            # read link previews attached to messages
+      - pins:write            # pin/announce messages in channels
+
+settings:
+  event_subscriptions:
+    # Bot events. Add message.channels / message.groups ONLY if you want the
+    # bot to hear every message and act WITHOUT being mentioned ("interact
+    # outside of mentions"). That requires a handler in bots/slack.py — none
+    # exists today — and it will fire on a LOT of traffic.
+    bot_events:
+      - app_mention
+      # - message.channels   # uncomment + add a handler to act unmentioned
+      # - message.groups     # same, private channels
+      # - file_shared        # only if you need upload-completed notifications
+
+    # User events require a user token and mirror what the user can see.
+    # file_created is not handled by this bot; omit unless you add a handler.
+    user_events: []
+      # - message.channels
+
+  # Socket Mode on: no public HTTP endpoint needed. Keep on for personal
+  # installs. Turn OFF only if you switch to an HTTPS request URL, in which
+  # case Slack must be able to reach your host.
+  socket_mode_enabled: true
+
+  # ---------------------------------------------------------------------------
+  # PERSONAL vs ORG
+  #   false -> install to this workspace only (recommended to start)
+  #   true  -> let workspace admins deploy org-wide. Requires Tier 4 review
+  #            and ALLOWED_SLACK_USER_IDS in .env, or anyone in the org can
+  #            drive your agent and your filesystem.
+  # ---------------------------------------------------------------------------
+  org_deploy_enabled: false
+
+  interactivity:
+    # Keep on if you add buttons/modals or slash commands later. The current
+    # approval flow is plain text replies ("@bot yes"), so it is not required.
+    is_enabled: false
+
+  # Feature flags that are irrelevant for a self-hosted bot. Leave off.
+  is_mcp_enabled: false
+  token_rotation_enabled: false
+  app_level_token_rotation_enabled: false
