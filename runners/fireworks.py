@@ -18,14 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
-try:
-    import fireworks
-    from fireworks import AsyncFireworks
-    _FIREWORKS_AVAILABLE = True
-except ImportError:
-    _FIREWORKS_AVAILABLE = False
-    fireworks = None  # type: ignore
-    AsyncFireworks = None  # type: ignore
+from openai import AsyncOpenAI
 
 import core.approvals as approvals
 from core.config import (
@@ -501,11 +494,11 @@ class FireworksAgentClient:
         api_key = api_key or settings_for("fireworks").api_key
         if not api_key:
             raise ValueError("Set FIREWORKS_API_KEY or pass api_key=")
-        if not _FIREWORKS_AVAILABLE:
-            raise RuntimeError(
-                "fireworks-ai is not installed — pip install 'fireworks-ai>=1.2.0'"
-            )
-        self._client = AsyncFireworks(api_key=api_key)
+        settings = settings_for("fireworks")
+        self._client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=settings.base_url or "https://api.fireworks.ai/inference/v1",
+        )
         self.tools = tools if tools is not None else {}
         self.system_prompt = system_prompt
         self.can_use_tool = can_use_tool
@@ -756,19 +749,21 @@ class FireworksAgentClient:
             try:
                 data = await self._call_fireworks()
             except Exception as e:
-                if _FIREWORKS_AVAILABLE and fireworks is not None:
-                    for exc_type in (
-                        fireworks.RateLimitError,
-                        fireworks.AuthenticationError,
-                        fireworks.APIStatusError,
-                        fireworks.APIConnectionError,
-                    ):
-                        if isinstance(e, exc_type):
-                            yield ResultMessage(
-                                session_id=self.session_id, is_error=True,
-                                result=f"Fireworks API error: {e}",
-                            )
-                            return
+                from openai import (
+                    APIConnectionError,
+                    APIStatusError,
+                    AuthenticationError,
+                    RateLimitError,
+                )
+
+                if isinstance(
+                    e, (RateLimitError, AuthenticationError, APIStatusError, APIConnectionError)
+                ):
+                    yield ResultMessage(
+                        session_id=self.session_id, is_error=True,
+                        result=f"Fireworks API error: {e}",
+                    )
+                    return
                 yield ResultMessage(
                     session_id=self.session_id, is_error=True,
                     result=f"Fireworks error: {e}",
@@ -978,24 +973,31 @@ class FireworksRunner:
         """Resolve model and optionally look up its context window from Fireworks."""
         spec = resolve_model(value)
         api_key = settings_for("fireworks").api_key
-        if api_key and _FIREWORKS_AVAILABLE:
+        if api_key:
+            # Best-effort catalog lookup over the same OpenAI-compatible client,
+            # so no second SDK is needed. Any failure keeps the fallback window,
+            # except a definitive "not found", which is worth telling the user.
             try:
-                client = AsyncFireworks(api_key=api_key)
                 parsed = _parse_full_model_id(spec.model_id)
                 account_id, name = parsed if parsed else ("fireworks", spec.model_id)
-                try:
-                    model = await client.models.get(name, account_id=account_id)
-                except fireworks.NotFoundError:
-                    model = None
-                await client.close()
-                context_length = getattr(model, "context_length", None) if model else None
+                async with AsyncOpenAI(
+                    api_key=api_key,
+                    base_url=settings_for("fireworks").base_url
+                    or "https://api.fireworks.ai/inference/v1",
+                ) as client:
+                    model = await client.models.retrieve(
+                        name, extra_query={"account_id": account_id}
+                    )
+                context_length = getattr(model, "context_length", None)
                 if context_length:
                     spec = ModelSpec(spec.name, spec.model_id, context_length)
-                elif model is None:
-                    print(f"[fireworks] warning: '{spec.model_id}' not found in catalog")
             except Exception as e:
-                print(f"[fireworks] warning: could not confirm context window for "
-                      f"'{spec.model_id}' ({e}); using fallback {spec.context_window}")
+                status = getattr(e, "status_code", None)
+                if status == 404:
+                    print(f"[fireworks] warning: '{spec.model_id}' not found in catalog")
+                else:
+                    print(f"[fireworks] warning: could not confirm context window for "
+                          f"'{spec.model_id}' ({e}); using fallback {spec.context_window}")
         self._model = spec
         return self._model
 

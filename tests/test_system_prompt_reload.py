@@ -43,9 +43,8 @@ def history(tmp_path):
 def make_client(module, name, history_dir, system_prompt, monkeypatch=None):
     """Build a client for `module`.
 
-    `fireworks-ai` is an optional dependency and the fireworks client refuses
-    to construct without it, so its SDK symbol is patched here. Every existing
-    runner test follows the same convention rather than requiring the package.
+    No optional SDK is needed for any of the three: every runner rides on the
+    openai package from the base requirements.
     """
     store = module.JsonFileSessionStore(directory=str(history_dir))
     common = dict(
@@ -56,14 +55,10 @@ def make_client(module, name, history_dir, system_prompt, monkeypatch=None):
     )
     if module is local:
         return local.LocalAgentClient(base_url="http://x", model="m", **common)
-    if module is fireworks:
-        if monkeypatch is not None:
-            monkeypatch.setattr(fireworks, "_FIREWORKS_AVAILABLE", True)
-            monkeypatch.setattr(fireworks, "AsyncFireworks", MagicMock(), raising=False)
-        common.pop("name", None)
-        return fireworks.FireworksAgentClient(model="m", api_key="k", **common)
-    # DeepInfraAgentClient takes no `name` argument, unlike the other two.
+    # FireworksAgentClient and DeepInfraAgentClient take no `name` argument.
     common.pop("name", None)
+    if module is fireworks:
+        return fireworks.FireworksAgentClient(model="m", api_key="k", **common)
     return deepinfra.DeepInfraAgentClient(model="m", api_key="k", **common)
 
 
