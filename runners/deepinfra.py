@@ -23,6 +23,7 @@ from core.config import (
     SYSTEM_PROMPT,
 )
 from core.agentdb import AgentDBSurface
+from core.history import JsonFileHistoryStore
 from core.prompts import apply_system_prompt
 from core.providers import settings_for
 from core.reasoning import (
@@ -134,19 +135,17 @@ class SessionStore(ABC):
     def save(self, session_id: str, messages: list[dict]) -> None: ...
 
 
-class JsonFileSessionStore(SessionStore):
-    def __init__(self, directory: str | Path = "./di_sessions"):
-        self.directory = Path(directory)
-    def _path(self, session_id: str) -> Path:
-        self.directory.mkdir(parents=True, exist_ok=True)
-        return self.directory / f"{session_id}.json"
-    def load(self, session_id: str) -> list[dict]:
-        path = self._path(session_id)
-        if path.exists():
-            return json.loads(path.read_text())
-        return []
-    def save(self, session_id: str, messages: list[dict]) -> None:
-        self._path(session_id).write_text(json.dumps(messages, indent=2))
+class JsonFileSessionStore(JsonFileHistoryStore, SessionStore):
+    """Persisted message history for one runner (see core.history)."""
+
+    def __init__(
+        self,
+        directory: str | Path = "./di_sessions",
+        legacy_directory: str | Path | None = None,
+    ):
+        JsonFileHistoryStore.__init__(
+            self, directory=directory, legacy_directory=legacy_directory
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -896,6 +895,9 @@ class DeepInfraRunner:
         settings_for("deepinfra").require_api_key()
         return cls(model=model)
 
+    #: Name used for the history directory and log prefixes.
+    name = "deepinfra"
+
     def __init__(self, model: str | None = None):
         self._model: ModelSpec = resolve_model(model)
         self._clients: dict[str, DeepInfraAgentClient] = {}
@@ -992,7 +994,7 @@ class DeepInfraRunner:
         if thread_id in self._clients:
             return self._clients[thread_id]
         store = platform.session_store
-        history_store = JsonFileSessionStore(directory=f"{store.base}/di_history")
+        history_store = JsonFileSessionStore.for_runner(store.base, self.name, legacy_name="di_history")
         system_prompt = f"{_BASE_SYSTEM_PROMPT}\n\n{SYSTEM_PROMPT}"
         # Local models can't call agentdb tools mid-turn, so pre-load memory
         # records from previous sessions into the system prompt at session start.
