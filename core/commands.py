@@ -203,7 +203,7 @@ async def idle_reply(
     from core import sessions as _sessions
 
     arg = raw_args.strip().lower()
-    if arg in ("stop", "off"):
+    if arg in ("start", "on"):
         _sessions.enable_keep_alive(thread_id)
         print(f"[idle] {thread_id}: keep-alive enabled by user_id={user_id}")
         if session_store is not None:
@@ -214,7 +214,7 @@ async def idle_reply(
             "♾️ Idle timeout disabled for this chat until `/idle start` or the bot restarts. "
             "The session will not be expired for inactivity."
         )
-    if arg in ("start", "on"):
+    if arg in ("stop", "off"):
         _sessions.disable_keep_alive(thread_id)
         print(f"[idle] {thread_id}: keep-alive disabled by user_id={user_id}")
         if session_store is not None:
@@ -222,7 +222,7 @@ async def idle_reply(
                 thread_id, "idle_keepalive_toggle", {"state": "stop", "user_id": user_id}
             )
         return "⏰ Idle timeout restored for this session."
-    state = "stop" if _sessions.is_keep_alive(thread_id) else "start"
+    state = "start" if _sessions.is_keep_alive(thread_id) else "stop"
     return f"{IDLE_USAGE} (currently {state})"
 
 
