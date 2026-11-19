@@ -22,6 +22,7 @@ section -- never the whole prompt.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Optional
 
@@ -38,6 +39,17 @@ BASE_SYSTEM_PROMPT = (
     "a directory by name, call lookup_directory first before searching."
 )
 
+#: Where user-editable prompt overrides live, and the variable that can
+#: relocate them. Read at call time so an operator can drop a file in without
+#: touching source, and so tests can point it elsewhere.
+PROMPT_DIR = Path("prompts")
+PROMPT_ENV = "AGENTGATE_PROMPTS_DIR"
+
+#: Override file names, one per surface.
+BASE_FILE = "base.md"
+HARD_RULES_FILE = "hard_rules.md"
+RESUME_FILE = "resume.md"
+
 #: How many trailing turns the resume block replays inline.
 RESUME_TAIL_TURNS = 2
 
@@ -50,9 +62,55 @@ RESUME_MAX_CHARS = 4000
 _HISTORY_UNAVAILABLE = "(could not be read; read it directly if you need detail)"
 
 
+def _strip_comments(text: str) -> str:
+    """Drop a leading `#` comment block so file headers stay out of the prompt.
+
+    Prompt files carry operator notes at the top (including the prefix-cache
+    rule). Sending those to the model would waste tokens and add noise, so the
+    leading comment lines are removed, along with surrounding blank lines.
+    """
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines) and (lines[i].lstrip().startswith("#") or not lines[i].strip()):
+        i += 1
+    return "\n".join(lines[i:]).strip()
+
+
+def _prompt_dir() -> Path:
+    override = os.environ.get(PROMPT_ENV)
+    return Path(override) if override else PROMPT_DIR
+
+
+def _override(filename: str) -> str:
+    """Read a prompt override, or "" when absent, empty, or unreadable.
+
+    Returning "" makes the caller fall back to the built-in text. An empty
+    override must never win: that would silently erase the hard rules.
+    """
+    try:
+        text = _strip_comments((_prompt_dir() / filename).read_text())
+    except OSError:
+        return ""
+    except Exception as e:  # unexpected read failure must not take startup down
+        print(f"[prompts] could not read {filename}: {e}")
+        return ""
+    return text
+
+
+def _section(filename: str, builtin: str) -> str:
+    """The override for `filename`, falling back to `builtin`."""
+    return _override(filename) or builtin
+
+
 def build_base_prompt() -> str:
-    """Layers 1+2: the workflow prompt plus AgentGate's hard rules."""
-    return f"{BASE_SYSTEM_PROMPT}\n\n{SYSTEM_PROMPT}"
+    """Layers 1+2: the workflow prompt plus AgentGate's hard rules.
+
+    Each layer can be overridden by a file in `PROMPT_DIR`; a missing, empty,
+    or unreadable file falls back to the built-in text.
+    """
+    base = _section(BASE_FILE, BASE_SYSTEM_PROMPT)
+    rules = _section(HARD_RULES_FILE, SYSTEM_PROMPT)
+    return f"{base}\n\n{rules}"
 
 
 def _load_messages(history_path: str) -> list[dict]:
@@ -127,10 +185,14 @@ def build_resume_block(
     Never raises. If the history cannot be read, the path is still named so the
     model can fetch it.
     """
-    header = [
-        "## Resuming an existing session",
-        "You are continuing a conversation that started earlier. Do not greet the",
+    intro = _section(
+        RESUME_FILE,
+        "## Resuming an existing session\n"
+        "You are continuing a conversation that started earlier. Do not greet the\n"
         "user or re-introduce yourself.",
+    )
+    header = [
+        intro,
         "",
         f"- Workspace: {workspace_path}",
         f"- Full conversation history: {history_path}",

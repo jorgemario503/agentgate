@@ -233,6 +233,35 @@ python run.py --telegram ollama surfer qwen3:14b \
 [ARCHITECTURE.md](ARCHITECTURE.md#configuration-precedence) for how precedence
 and origin tracking work.
 
+### Custom system prompts (non-Claude runners)
+
+The system prompt for the local, fireworks and deepinfra runners can be
+overridden without editing source. Drop a file in `prompts/` — or point
+`AGENTGATE_PROMPTS_DIR` at your own directory:
+
+| File | Replaces |
+|---|---|
+| `base.md` | the workflow prompt (tool list, inspection preferences) |
+| `hard_rules.md` | the security instructions |
+| `resume.md` | the opening lines of the resume block |
+
+```bash
+cp prompts/base.md prompts/base.md   # already shipped; edit your copy
+export AGENTGATE_PROMPTS_DIR=/path/to/my-prompts
+```
+
+A missing, empty, or unreadable file falls back to the built-in text — an
+override can never blank the prompt. `prompts/` ships an example base prompt
+only. `hard_rules.md` is deliberately **not** shipped: supplying one replaces
+the built-in security instructions wholesale, so it is an opt-in choice.
+
+**Keep the prompt prefix stable.** Providers cache a prompt by matching from
+the first character and discard the cached prefix on the first difference, so
+keep the most stable text at the top and never put timestamps, turn counters,
+thread ids or workspace paths in the prefix. The shipped files carry a header
+explaining this; leading `#` comment lines are stripped and never reach the
+model.
+
 ---
 
 ## Allowlists
