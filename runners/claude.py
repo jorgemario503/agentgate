@@ -35,7 +35,6 @@ from claude_agent_sdk import (
 import core.approvals as approvals
 from core.config import (
     ADDITIONAL_DIRS,
-    AGENTDB_ENABLED,
     BLOCKED_PATTERNS,
     SDK_ALLOWED_TOOLS,
 )

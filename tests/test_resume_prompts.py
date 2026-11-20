@@ -155,6 +155,52 @@ def test_d1_missing_history_file():
     assert "/nonexistent/t1.json" in block  # path still named so the model can look
 
 
+def test_missing_history_reports_no_prior_history_not_a_read_error():
+    """A brand-new session has no file yet; that is not a read failure.
+
+    Before this was distinguished, a missing/empty history rendered "could not
+    be read; read it directly", which sent the model chasing a file with
+    nothing in it. The first turn of every session hits this path.
+    """
+    block = build_resume_block(history_path="/nonexistent/t1.json", workspace_path="/ws")
+    assert "no earlier messages" in block.lower()
+    assert "could not be read" not in block.lower()
+
+
+def test_corrupt_history_reports_read_error(tmp_path):
+    """A file that exists but cannot be parsed is a genuine read error."""
+    path = tmp_path / "t1.json"
+    path.write_text("{not json")
+    block = build_resume_block(history_path=str(path), workspace_path="/ws")
+    assert "could not be read" in block.lower()
+    assert "no earlier messages" not in block.lower()
+
+
+def test_empty_history_file_reports_no_prior_history(tmp_path):
+    """An empty file is an unwritten history, not a corrupt one."""
+    path = tmp_path / "t1.json"
+    path.write_text("[]")
+    block = build_resume_block(history_path=str(path), workspace_path="/ws")
+    assert "no earlier messages" in block.lower()
+
+
+def test_whitespace_only_history_reports_no_prior_history(tmp_path):
+    """A zero-length file from a created-but-unsaved session is not an error."""
+    path = tmp_path / "t1.json"
+    path.write_text("   \n  ")
+    block = build_resume_block(history_path=str(path), workspace_path="/ws")
+    assert "no earlier messages" in block.lower()
+    assert "could not be read" not in block.lower()
+
+
+def test_system_only_history_reports_no_prior_history(tmp_path):
+    """A file holding only the system message has no turns to resume."""
+    path = tmp_path / "t1.json"
+    path.write_text(json.dumps([{"role": "system", "content": "hi"}]))
+    block = build_resume_block(history_path=str(path), workspace_path="/ws")
+    assert "no earlier messages" in block.lower()
+
+
 def test_d2_corrupt_history_file(tmp_path):
     path = tmp_path / "t1.json"
     path.write_text("{not json")

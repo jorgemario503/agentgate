@@ -203,26 +203,26 @@ async def idle_reply(
     from core import sessions as _sessions
 
     arg = raw_args.strip().lower()
-    if arg in ("start", "on"):
+    if arg in ("stop", "off"):
         _sessions.enable_keep_alive(thread_id)
         print(f"[idle] {thread_id}: keep-alive enabled by user_id={user_id}")
         if session_store is not None:
             session_store.append_audit_log(
-                thread_id, "idle_keepalive_toggle", {"state": "start", "user_id": user_id}
+                thread_id, "idle_keepalive_toggle", {"state": "on", "user_id": user_id}
             )
         return (
             "♾️ Idle timeout disabled for this chat until `/idle start` or the bot restarts. "
             "The session will not be expired for inactivity."
         )
-    if arg in ("stop", "off"):
+    if arg in ("start", "on"):
         _sessions.disable_keep_alive(thread_id)
         print(f"[idle] {thread_id}: keep-alive disabled by user_id={user_id}")
         if session_store is not None:
             session_store.append_audit_log(
-                thread_id, "idle_keepalive_toggle", {"state": "stop", "user_id": user_id}
+                thread_id, "idle_keepalive_toggle", {"state": "off", "user_id": user_id}
             )
         return "⏰ Idle timeout restored for this session."
-    state = "start" if _sessions.is_keep_alive(thread_id) else "stop"
+    state = "stop" if _sessions.is_keep_alive(thread_id) else "start"
     return f"{IDLE_USAGE} (currently {state})"
 
 
@@ -495,7 +495,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec("autoapprove", _cmd_autoapprove, takes_args=True, admin_only=True,
                 usage="autoapprove on|off", description="Toggle auto-approval"),
     CommandSpec("idle", _cmd_idle, takes_args=True, usage="idle start|stop",
-                description="Disable/enable the idle timeout"),
+                description="`stop` skips the idle reaper, `start` restores normal expiry"),
     CommandSpec("reasoning", _cmd_reasoning, takes_args=True, usage="reasoning off|low|medium|high|show",
                 description="Set reasoning effort"),
     CommandSpec("help", _cmd_help, description="List available commands"),
