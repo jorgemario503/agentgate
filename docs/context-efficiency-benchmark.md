@@ -93,6 +93,31 @@ cached_tokens)` — same report object, no code change. Default-on still require
 that live measurement; the offline result only proves we do not *regress* the
 cacheable prefix.
 
+## Live multi-case suite (opt-in)
+
+Run: `AGENTGATE_LIVE_TESTS=1 python -c "from core.live_task_check import run_multi_case as r; print(r())"`
+
+Exercises four task types (log-needle, JSON-anomaly, code-identifier,
+dense-line) across several **registry-validated** DeepInfra models (selection
+verified with `core.reasoning.registry.lookup`; the env model runs first, then
+curated flash-tier candidates). One measured run, budget 12,000 tokens:
+
+| model | cases run | correct |
+|---|---|---|
+| DeepSeek-V4.1-Flash-1017 | 4 | 4 |
+| MiMo-V2.6-Flash | 3 | 3 |
+| Qwen3.8-Flash | 3 | 3 |
+
+**10/10 completed cases correct:** each needle — the FATAL table name, the JSON
+anomaly detail, the exact function name, the trailing dense-line token — was
+recovered from the *compressed* message. Used 10,650 / 12,000 tokens; **two cases
+were refused** by the guardrail because their worst-case cost (9,230) exceeded
+the remaining budget — no overspend, clean skip. Every needle is independently
+recoverable via `tool_result_read` (the artifact id is in the handle).
+
+Caveat: a handful of cases on flash-tier models — evidence that compression
+preserves needed content, not a full coding-task benchmark.
+
 ## Live prefix-cache reuse (H13 stage 2, opt-in)
 
 Run: `AGENTGATE_LIVE_TESTS=1 python -c "from core.live_task_check import run_live_cache_reuse as r; print(r())"`

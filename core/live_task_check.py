@@ -247,5 +247,154 @@ async def _run_cache_async(model: str, budget_limit: int) -> dict:
     return report
 
 
+# ---------------------------------------------------------------------------
+# Multi-case suite (small, cheap families validated against the deepinfra
+# reasoning registry; budget-capped across every model x case combination).
+# ---------------------------------------------------------------------------
+
+# Curated flash/instruct-tier candidates; each is validated with
+# core.reasoning.registry.lookup before use, and the env model runs first.
+_CANDIDATE_MODELS = (
+    "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+    "XiaomiMiMo/MiMo-V2.6-Flash",
+    "Qwen/Qwen3.8-Flash",
+    "google/gemma-4-26B-A4B-it",
+)
+
+
+def select_models(limit: int = 3) -> list:
+    """Return up to `limit` DeepInfra model ids, registry-validated.
+
+    The env model (settings_for) is tried first; then curated candidates. Only
+    ids the deepinfra reasoning registry knows are returned (lookup != None),
+    so we never fire at an unknown/unlisted model.
+    """
+    from core.reasoning.registry import lookup
+
+    chosen = []
+    env_model = settings_for("deepinfra").model
+    ordered = tuple([env_model] if env_model else []) + _CANDIDATE_MODELS
+    seen = set()
+    for mid in ordered:
+        if not mid or mid in seen:
+            continue
+        seen.add(mid)
+        if lookup("deepinfra", mid) is not None:
+            chosen.append(mid)
+        if len(chosen) >= limit:
+            break
+    return chosen
+
+
+def _cases() -> list:
+    """(name, full_tool_text, needle_token, question) task cases.
+
+    Each needle is a fact that must survive compression OR be recoverable, so a
+    correct answer proves the feature did not destroy needed content.
+    """
+    cases = []
+
+    # 1. needle in a big log
+    log = "\n".join("INFO step %d ok" % i for i in range(400))
+    log = log.replace("INFO step 200 ok", "FATAL: migration aborted, missing table 'invoices_2024'")
+    cases.append(("log_needle", log, "invoices_2024",
+                  "What table was missing in the FATAL line?"))
+
+    # 2. JSON anomaly
+    import json as _json
+    recs = [{"id": i, "status": "ok"} for i in range(300)]
+    recs[150] = {"id": 150, "status": "ERROR", "detail": "unique-anomaly-XYZ"}
+    cases.append(("json_anomaly", _json.dumps(recs), "unique-anomaly-XYZ",
+                  "Which record had a non-ok status, and what was its detail?"))
+
+    # 3. code identifier preservation
+    code = "\n".join([
+        "def resolve_directory(name, registry):",
+        "    key = name.strip().lower()",
+        "    if key not in registry:",
+        "        raise KeyError(key)",
+        "    return registry[key]",
+    ] * 200)
+    cases.append(("code_ident", code, "resolve_directory",
+                  "What is the exact name of the function defined here?"))
+
+    # 4. dense line
+    dense = "START" + ("Q" * 20000) + "ENDMARKER_42"
+    cases.append(("dense_line", dense, "ENDMARKER_42",
+                  "What token appears at the very end of the data?"))
+    return cases
+
+
+def run_multi_case(budget=None, max_models=3) -> dict:
+    """Run every case across a few registry-validated models, budget-capped."""
+    if not live_enabled():
+        raise skip_reason_error(LIVE_FLAG + " not set")
+    import asyncio
+
+    models = select_models(limit=max_models)
+    if not models:
+        raise skip_reason_error("no registry-validated deepinfra models available")
+    if budget is None:
+        budget = int(os.environ.get(BUDGET_ENV, DEFAULT_BUDGET))
+    return asyncio.run(_run_multi_async(models, budget))
+
+
+async def _run_multi_async(models, budget_limit):
+    import tempfile
+    client = _client()
+    budget = TokenBudget(limit=budget_limit)
+    report = {"models": models, "budget_limit": budget_limit,
+              "results": [], "skipped": [], "used_tokens": 0, "calls": 0}
+    try:
+        for model in models:
+            for name, full, needle, question in _cases():
+                with tempfile.TemporaryDirectory() as d:
+                    pipe = ToolResultPipeline(
+                        d, session_id="live", workspace_id="/ws",
+                        enabled=True, dedup_enabled=False, min_chars=1000,
+                        compress_config=CompressConfig(min_chars=1000),
+                    )
+                    compressed = pipe.process(full, tool_name="Bash")
+                messages = [
+                    {"role": "system", "content": "You are a terse assistant. Answer briefly."},
+                    {"role": "user", "content": "Read the tool output."},
+                    {"role": "assistant", "content": None,
+                     "tool_calls": [{"id": "c1", "type": "function",
+                                     "function": {"name": "Bash", "arguments": "{}"}}]},
+                    {"role": "tool", "tool_call_id": "c1", "content": compressed},
+                    {"role": "user", "content": question},
+                ]
+                try:
+                    budget.precheck(_est_tokens(json.dumps(messages)) + _est_tokens(question) * 0, MAX_COMPLETION_TOKENS)
+                except BudgetExceeded as e:
+                    report["skipped"].append("%s/%s: %s" % (model, name, e))
+                    continue
+                try:
+                    resp = await client.chat.completions.create(
+                        model=model, messages=messages,
+                        max_tokens=MAX_COMPLETION_TOKENS, temperature=0)
+                    data = resp.model_dump(exclude_none=True)
+                except Exception as e:
+                    report["results"].append({
+                        "model": model, "case": name, "error": str(e)[:200]})
+                    continue
+                budget.record(data.get("usage"))
+                text = (data["choices"][0]["message"].get("content") or "").strip()
+                report["results"].append({
+                    "model": model, "case": name,
+                    "correct": needle in text,
+                    "answer": text[:200],
+                    "changed": compressed != full,
+                })
+    finally:
+        try:
+            await client.close()
+        except Exception:
+            pass
+        report["used_tokens"] = budget.used
+        report["calls"] = budget.calls
+    return report
+
+
 if __name__ == "__main__":
     print(json.dumps(run_task_correctness(), indent=2))

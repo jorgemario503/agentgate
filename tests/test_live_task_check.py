@@ -13,7 +13,9 @@ from core.live_task_check import (
     TokenBudget,
     live_enabled,
     run_live_cache_reuse,
+    run_multi_case,
     run_task_correctness,
+    select_models,
     skip_reason_error,
 )
 
@@ -109,6 +111,48 @@ class TestLiveCacheReuse(unittest.TestCase):
         self.assertIn("cache_reuse_observed", report)
         if len(report["turns"]) == 2:
             self.assertIn("cached_tokens", report["turns"][1])
+
+
+class TestSelectionAndCases(unittest.TestCase):
+    def test_select_models_registry_validated(self):
+        from core.reasoning.registry import lookup
+        models = select_models(limit=3)
+        self.assertTrue(models)
+        for m in models:
+            self.assertIsNotNone(lookup("deepinfra", m))
+
+    def test_select_models_respects_limit(self):
+        self.assertLessEqual(len(select_models(limit=2)), 2)
+
+    def test_cases_have_needle_and_question(self):
+        from core.live_task_check import _cases
+        cases = _cases()
+        self.assertTrue(cases)
+        for name, full, needle, question in cases:
+            self.assertTrue(needle and question)
+            # every needle must be recoverable from the ORIGINAL text
+            self.assertIn(needle, full)
+
+
+@unittest.skipUnless(
+    os.environ.get("AGENTGATE_LIVE_TESTS", "").strip() in ("1", "true", "yes", "on"),
+    "set AGENTGATE_LIVE_TESTS=1 to run the live multi-case DeepInfra suite",
+)
+class TestLiveMultiCase(unittest.TestCase):
+    def test_multi_case_across_models(self):
+        budget = int(os.environ.get("AGENTGATE_LIVE_TOKEN_BUDGET", "6000"))
+        report = run_multi_case(budget=budget, max_models=3)
+        # budget never exceeded
+        self.assertLessEqual(report["used_tokens"], report["budget_limit"])
+        self.assertTrue(report["results"] or report["skipped"])
+        # every completed case must be correct (no destroyed content)
+        for r in report["results"]:
+            if "error" in r:
+                continue
+            self.assertTrue(
+                r["correct"],
+                msg="%s/%s wrong: %r" % (r["model"], r["case"], r["answer"]),
+            )
 
 
 if __name__ == "__main__":
