@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Guard against the drift that let the dead skill/proposal path hide:
+      # the venv had agentdb 0.4.1 while the code assumed the 0.5.0 memory-only
+      # surface. These assertions fail loudly if the real installed package no
+      # longer matches what the code targets.
+      - name: Verify AgentDB is the expected memory-only surface
+        run: |
+          python - <<'PY'
+          import sys
+          from importlib.metadata import version, PackageNotFoundError
+
+          try:
+              v = version("agentdatabase")
+          except PackageNotFoundError:
+              sys.exit("agentdatabase is not installed — check requirements.txt")
+
+          major, minor = (int(p) for p in v.split(".")[:2])
+          if (major, minor) < (0, 5):
+              sys.exit(f"agentdatabase {v} is too old; agentgate targets the 0.5.0+ memory-only API")
+
+          from agentdb.adapters.middleware import AgentDBMiddleware
+
+          removed = ("list_proposals", "propose_skill", "approve_proposal", "reject_proposal")
+          present = [name for name in removed if hasattr(AgentDBMiddleware, name)]
+          if present:
+              sys.exit(
+                  f"agentdatabase {v} still exposes removed skill APIs {present}; "
+                  "agentgate has dropped them — update the pin or the code"
+              )
+
+          print(f"agentdatabase {v}: memory-only surface confirmed")
+          PY
+
+      - name: Run tests
+        run: python -m pytest -q
