@@ -136,3 +136,7 @@ path/symlink security, metadata + prefix stability.
 
 Offline replay harness and results: see [context-efficiency-benchmark.md](context-efficiency-benchmark.md).
 Run it with `python -m core.benchmark`.
+
+## Background
+
+Phase 0 discovery (call paths, integration point, baseline): see [context-efficiency-discovery.md](context-efficiency-discovery.md).

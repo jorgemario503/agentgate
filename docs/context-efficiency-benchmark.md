@@ -7,10 +7,13 @@ production measurements.
 
 ## Environment
 
-- Repo: AgentGate working tree, branch `main`.
-- Python: 3.14 (the project `.venv`).
-- Commit: the commit that adds this file.
-- Run: `python -m core.benchmark`.
+- Repo: AgentGate working tree, branch `feat/context-efficiency` (PR #15).
+- Tested code commit: `d6a423e` (multi-case suite); this report is added on top.
+- Python: 3.14 (the project `.venv`); `openai` 2.54.0.
+- Baseline on entry (branch `main`): 421 passed; current suite: 499 passed,
+  3 skipped (the 3 live probes, gated off by default).
+- Run (offline): `python -m core.benchmark`
+- Run (live, opt-in): `AGENTGATE_LIVE_TESTS=1 python -m core.live_task_check`
 
 ## Variants
 
@@ -147,3 +150,37 @@ Against `deepseek-ai/DeepSeek-V4.1-Flash-1017` (the runner's model, via the same
 - Budget respected: used well under the cap; the run refuses any call whose worst case would exceed the remaining budget.
 
 This validates correctness on one case, not a full task suite. The provider reports `cached_tokens` and cost per call, which the H13 stage-2 live run can record via `record_provider_usage`.
+
+## Failure examples (honest)
+
+These are cases the system **declines to compress** or **refuses to run** — by
+design, not bugs:
+
+- **No store -> no lossy output.** If the artifact store is unavailable, the
+  compressor returns the original unchanged (`transforms=("no_store",)`,
+  `store_unavailable` if `put` fails) rather than emit lossy text under a false
+  retrieval promise.
+- **Budget-refused live cases.** In the multi-case run, 2 of 12 combinations
+  (`MiMo-V2.6-Flash/code_ident`, `Qwen3.8-Flash/code_ident`) were **refused**
+  because their worst-case cost (9,230 tokens) exceeded the remaining budget
+  (3,353 / 1,881). The guardrail stops rather than overspend; those cases were
+  reported as skipped, not failed.
+- **Conservative passthrough.** Source code, unified diffs and config are left
+  to head/tail or untouched; tracebacks keep only the terminal exception. These
+  intentionally trade savings for safety.
+
+## Cost accounting (live runs)
+
+Measured `estimated_cost` from a real DeepInfra response: 332 total tokens ->
+`$3.724e-05` (rate ~`$1.12e-07`/token). Using that observed rate:
+
+| Run | tokens | est. cost |
+|---|---|---|
+| Single task-correctness probe | 332 | ~$0.000037 |
+| H13 cache-reuse (2 calls) | 2,434 | ~$0.00027 |
+| Multi-case suite (10 calls) | 10,650 | ~$0.00120 |
+
+These are tiny because the live probes are deliberately small and budget-capped
+(`AGENTGATE_LIVE_TOKEN_BUDGET`, default 6000). They validate behaviour, not
+production spend. Cached-token reuse observed on the H13 run (1152/1215 on turn
+2) is billed at the provider's cache-read rate, not counted as full-price here.
