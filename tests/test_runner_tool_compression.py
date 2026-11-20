@@ -15,9 +15,9 @@ import tempfile
 import types
 import unittest
 
-from runners.deepinfra import DeepInfraAgentClient, Tool, _tool_schema
+from runners.deepinfra import DeepInfraAgentClient
+from core.tools.registry import Tool, _tool_schema, build_tools
 from runners.deepinfra import JsonFileSessionStore
-from core.artifacts import ArtifactStore
 from core.tool_pipeline import ToolResultPipeline
 
 
@@ -72,8 +72,7 @@ def _make_completion(tool_name, tool_id):
 class TestDisabledByteIdentical(unittest.TestCase):
     def test_disabled_tool_message_is_raw(self):
         log = _big_log()
-        with tempfile.TemporaryDirectory() as d:
-            store = ArtifactStore(d)
+        with tempfile.TemporaryDirectory():
             client = DeepInfraAgentClient(
                 model="m", api_key="k",
                 tools={"Bash": Tool(schema=_tool_schema("Bash", "x", {}, []),
@@ -104,8 +103,8 @@ class TestEnabledCompresses(unittest.TestCase):
         pipeline = ToolResultPipeline(
             d, session_id="s", workspace_id="/ws", enabled=True, min_chars=1000,
         )
-        from runners.deepinfra import build_tools
-        tools = build_tools("/ws", _FakeStore(), pipeline)
+        tools = build_tools("/ws", _FakeStore(), output_cap=8000, bash_timeout=120,
+                            pipeline=pipeline)
         # override Bash with our fake to avoid running a shell
         tools["Bash"] = Tool(schema=_tool_schema("Bash", "x", {}, []),
                              handler=_FakeTool(log).handler)

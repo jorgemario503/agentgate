@@ -399,25 +399,9 @@ async def main(backend: str = "claude", model: str | None = None, bot_name: str 
     os.makedirs(telegram_store.base, exist_ok=True)
 
     if config.AGENTDB_ENABLED:
-        try:
-            from agentdb import AgentDB
-            agentdb_permissions = Path(config.AGENTDB_PERMISSIONS_PATH)
-            if not agentdb_permissions.exists():
-                raise FileNotFoundError(
-                    f"AgentDB permissions file not found: {agentdb_permissions}. "
-                    f"Set AGENTDB_PERMISSIONS_PATH or create the file."
-                )
-            db = AgentDB(
-                memory_dir=config.AGENTDB_MEMORY_DIR,
-                permissions_path=agentdb_permissions,
-                tracking_directories=["agent-sessions"],
-                tracking_root=".",
-            )
-            runner.init_agentdb(db, platform=TELEGRAM_PLATFORM)
-            db.lifecycle.run_sweep()
-            print(f"[startup] AgentDB initialized at {config.AGENTDB_MEMORY_DIR} (agent_id={BOT_AGENT_ID})")
-        except ImportError:
-            print("[startup] AgentDB not installed — skipping (AGENTDB_ENABLED=true but package missing)")
+        from core.agentdb import init_agentdb_for
+        init_agentdb_for(runner, TELEGRAM_PLATFORM, config=config)
+        print(f"[startup] AgentDB initialized at {config.AGENTDB_MEMORY_DIR} (agent_id={BOT_AGENT_ID})")
 
     print(f"[startup] Blocked patterns: {len(config.BLOCKED_PATTERNS)} rules active")
     suffix_hint = bot_name.upper() if bot_name else None

@@ -357,12 +357,14 @@ history from disk by thread id.
 
 ---
 
-## AgentDB (optional governed memory)
+## AgentDB (governed memory — enabled by default)
 
-Disabled by default. When enabled, the agent gains persistent cross-session
-memory governed by [`permissions.yaml`](permissions.yaml).
+AgentDB ships with the app (see `requirements.txt`) and is **on by default**:
+the agent gains persistent cross-session memory, skill proposals, and the
+`/propose` `/approve` workflow, all governed by
+[`permissions.yaml`](permissions.yaml).
 
-Enable via `.env`:
+Configuration via `.env` (defaults shown):
 
 ```
 AGENTDB_ENABLED=true
@@ -370,7 +372,11 @@ AGENTDB_MEMORY_DIR=./agentdb-workspace
 AGENTDB_PERMISSIONS_PATH=./permissions.yaml
 ```
 
-Requires `pip install "agentdatabase>=0.1.0"` (import name stays `agentdb`).
+Startup **fails loudly** with an actionable message if the package, the
+permissions file, or the memory dir is missing. To run deliberately without
+governed memory, set `AGENTDB_ENABLED=false` (memory and skill commands are then
+unavailable).
+
 For semantic retrieval, set `embeddings: {enabled: true}` in
 `<AGENTDB_MEMORY_DIR>/config/memory.yaml` and install
 `pip install "agentdatabase[local-embed]"`.

@@ -70,9 +70,9 @@ ADMIN_WHATSAPP_USER_IDS = set(
 # and in runners/claude_reasoning.py, deliberately separate from provider specs.
 
 # -------------------------
-# AGENTDB (optional — disabled by default)
+# AGENTDB (governed long-term memory — enabled by default)
 # -------------------------
-AGENTDB_ENABLED = os.environ.get("AGENTDB_ENABLED", "false").lower() in ("true", "1", "yes")
+AGENTDB_ENABLED = os.environ.get("AGENTDB_ENABLED", "true").lower() in ("true", "1", "yes")
 # AGENTDB_MEMORY_DIR is the workspace root. The SQLite DB lives at
 #   <AGENTDB_MEMORY_DIR>/database/agentdb.sqlite
 # and the config file at:

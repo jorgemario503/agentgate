@@ -1,6 +1,4 @@
 """Tests for core/config.py — centralized env var loading."""
-import os
-import pytest
 
 
 def test_blocked_patterns_not_empty():
@@ -20,8 +18,17 @@ def test_sdk_allowed_tools_contains_read():
     assert "Bash" not in SDK_ALLOWED_TOOLS
 
 
-def test_agentdb_enabled_defaults_false(monkeypatch):
+def test_agentdb_enabled_defaults_true(monkeypatch):
+    # AgentDB is part of the normal install; memory is on unless explicitly off.
     monkeypatch.delenv("AGENTDB_ENABLED", raising=False)
+    import importlib
+    import core.config as cfg
+    importlib.reload(cfg)
+    assert cfg.AGENTDB_ENABLED is True
+
+
+def test_agentdb_enabled_false_when_explicitly_disabled(monkeypatch):
+    monkeypatch.setenv("AGENTDB_ENABLED", "false")
     import importlib
     import core.config as cfg
     importlib.reload(cfg)
