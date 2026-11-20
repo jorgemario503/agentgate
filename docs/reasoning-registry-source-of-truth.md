@@ -66,6 +66,43 @@ the honest registry style for it is `model_variant` — reasoning-capable, but w
 should not send a `reasoning_effort` parameter. This is exactly the distinction
 the old hand-list could not express, which is why the model "was not found".
 
+## Finding: Fireworks has no reasoning tag — classify by family, confirm by probe
+
+Fireworks' catalog (`GET https://api.fireworks.ai/inference/v1/models`) does
+**not** publish a reasoning field. Each entry exposes only:
+
+```json
+{
+  "id": "accounts/fireworks/models/gpt-oss-120b",
+  "kind": "HF_BASE_MODEL",
+  "supports_chat": true,
+  "supports_tools": true,
+  "context_length": 131072
+}
+```
+
+So unlike DeepInfra, the catalog cannot drive the registry automatically for
+Fireworks. Instead:
+
+- **Parameter shape comes from the official docs**
+  (<https://fireworks.ai/docs/guides/reasoning>): a top-level
+  `reasoning_effort` parameter accepting `"low" | "medium" | "high"`, with the
+  model's reasoning returned in the `reasoning_content` field. That is exactly
+  the registry's `reasoning_effort` style and the `response_field` we already
+  check — no code change needed, only registry coverage.
+- **Which models honour it is confirmed by probe, not guessed.** Every Fireworks
+  *chat* model in the live catalog was sent a request with `reasoning_effort`
+  and checked for `reasoning_content`; all chat models accepted it and returned
+  reasoning. A non-reasoning model (e.g. an embedding model) returns
+  HTTP 400 `"non-reasoning model does not support reasoning_effort"`, which
+  `looks_like_rejection()` recognises, so it disables cleanly.
+
+Because there is no tag to match on, the Fireworks entries are matched by
+**family name** (`*kimi-k3*`, `*glm-5*`, `*deepseek-v4*`, `*qwen3p8*`, …). This
+is inherently hand-curated, so it should be revisited when Fireworks ships a new
+family — run the same probe to confirm before adding the pattern. Embedding and
+reranker models are deliberately left out so we never send them the parameter.
+
 ## What this enables
 
 A refresh is driven from the catalog rather than hand-edited:

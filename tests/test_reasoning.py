@@ -254,3 +254,46 @@ def test_r1_and_gptoss_still_use_reasoning_effort_after_v4_entry():
     """Guard: the DeepSeek entries must not shadow the earlier effort-style patterns."""
     assert resolve("deepinfra", "deepseek-ai/DeepSeek-R1-0528").style == "reasoning_effort"
     assert resolve("deepinfra", "openai/gpt-oss-120b").style == "reasoning_effort"
+
+
+# --------------------------------------------------------------------------
+# Fireworks: chat models accept top-level reasoning_effort
+# --------------------------------------------------------------------------
+#
+# Fireworks has no reasoning tag in /models, so coverage is by family name.
+# Every Fireworks *chat* model was probe-confirmed to accept reasoning_effort
+# and return reasoning_content (see docs/reasoning-registry-source-of-truth.md).
+# Ids are "accounts/fireworks/models/<name>".
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "minimax-m3", "gpt-oss-120b", "nemotron-3-ultra-nvfp4", "kimi-k3",
+        "qwen3p8-max", "glm-5p3", "glm-5p3-flash", "deepseek-v4p1-flash",
+        "ember-1", "nemotron-lightning-3p5-30b-a3b", "inkling",
+        "deepseek-v4p1-flash-1017", "minimax-m3p1-flash", "qwen3p8-2p4t-a95b",
+    ],
+)
+def test_fireworks_chat_models_resolve_to_reasoning_effort(name):
+    model = f"accounts/fireworks/models/{name}"
+    resolution = resolve("fireworks", model)
+    assert resolution.in_registry is True
+    assert resolution.style == "reasoning_effort"
+    # The request carries the top-level parameter Fireworks documents.
+    assert build_request_kwargs(resolution, "high", model) == {"reasoning_effort": "high"}
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["qwen3-embedding-8b", "qwen3-reranker-8b"],
+)
+def test_fireworks_embedding_and_reranker_not_registered(name):
+    """Non-chat models are left out, so we never send them reasoning_effort."""
+    model = f"accounts/fireworks/models/{name}"
+    assert lookup("fireworks", model) is None
+
+
+def test_fireworks_routers_resolve_like_their_model():
+    """Spot/router ids share the family name and resolve the same way."""
+    assert resolve("fireworks", "accounts/fireworks/routers/kimi-k3-fast").style == "reasoning_effort"
+    assert resolve("fireworks", "accounts/fireworks/routers/glm-5p3-spot").style == "reasoning_effort"

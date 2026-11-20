@@ -70,11 +70,31 @@ REGISTRY: dict[str, list[tuple[str, ModelReasoning]]] = {
         ("*thinking*", ModelReasoning("model_variant")),
     ],
     "fireworks": [
+        # Fireworks has no machine-readable reasoning tag in /models (unlike
+        # DeepInfra), so these are matched by family name. Every Fireworks *chat*
+        # model we probed accepts the top-level reasoning_effort parameter
+        # ("low"|"medium"|"high") and returns reasoning_content, per
+        # https://fireworks.ai/docs/guides/reasoning -- see
+        # docs/reasoning-registry-source-of-truth.md.
+        # A non-reasoning model (e.g. an embedding model) rejects it with
+        # "non-reasoning model does not support reasoning_effort", which
+        # looks_like_rejection() recognises, so it disables cleanly.
         ("*deepseek-r1*", ModelReasoning("reasoning_effort")),
         ("*r1*", ModelReasoning("reasoning_effort")),
         ("*gpt-oss*", ModelReasoning("reasoning_effort")),
         ("*kimi-k2*thinking*", ModelReasoning("reasoning_effort")),
         ("*thinking*", ModelReasoning("reasoning_effort")),
+        # Reasoning families confirmed by probe against the live catalog.
+        ("*deepseek-v4*", ModelReasoning("reasoning_effort")),
+        ("*deepseek-v3*", ModelReasoning("reasoning_effort")),
+        ("*kimi-k3*", ModelReasoning("reasoning_effort")),
+        ("*glm-5*", ModelReasoning("reasoning_effort")),
+        ("*qwen3p8*", ModelReasoning("reasoning_effort")),
+        ("*minimax-*", ModelReasoning("reasoning_effort")),
+        ("*nemotron-*", ModelReasoning("reasoning_effort")),
+        ("*ember-*", ModelReasoning("reasoning_effort")),
+        # Standalone reasoning models with no family prefix.
+        ("*/inkling", ModelReasoning("reasoning_effort")),
     ],
     "local": [
         # Ollama / vLLM / llama.cpp expose reasoning_effort when supported.
