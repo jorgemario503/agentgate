@@ -58,6 +58,11 @@ REGISTRY: dict[str, list[tuple[str, ModelReasoning]]] = {
         ("deepseek-r1*", ModelReasoning("reasoning_effort", notes="DeepSeek R1 reasoning model")),
         ("deepseek-ai/DeepSeek-R1*", ModelReasoning("reasoning_effort")),
         ("*r1*", ModelReasoning("reasoning_effort")),
+        # DeepSeek V3.1/V4 are reasoning-capable but, per DeepInfra's catalog
+        # tags, carry `reasoning` without `reasoning_effort` -- so no depth
+        # parameter: style is model_variant. (docs/reasoning-registry-source-of-truth.md)
+        ("deepseek-ai/DeepSeek-V3*", ModelReasoning("model_variant", notes="reasoning-capable, no effort param")),
+        ("deepseek-ai/DeepSeek-V4*", ModelReasoning("model_variant", notes="reasoning-capable, no effort param")),
         # gpt-oss supports reasoning_effort low|medium|high.
         ("*gpt-oss*", ModelReasoning("reasoning_effort")),
         ("*kimi-k2*thinking*", ModelReasoning("reasoning_effort")),

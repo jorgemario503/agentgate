@@ -140,3 +140,91 @@ def test_runtime_state_resets_when_model_changes():
     assert state.state == "unknown"
     assert state.last_reasoning == ""
     assert state.model_id == "model-b"
+
+
+# --------------------------------------------------------------------------
+# Runner model accessor — the id /reasoning resolves against
+# --------------------------------------------------------------------------
+#
+# Bots used to derive the reasoning model with `getattr(runner, "model", "")`.
+# LocalRunner happens to expose `.model`, but DeepInfra and Fireworks keep the
+# id on `._model.model_id`, so that getattr returned "" -- and /reasoning then
+# reported "model not in the registry" for a model it could never match.
+# `current_model_id` gives every runner one accessor that returns the real id.
+
+def test_deepinfra_reports_active_model_id():
+    from runners.deepinfra import DeepInfraRunner
+
+    runner = DeepInfraRunner(model="deepseek-ai/DeepSeek-V4.1-Flash-1017")
+    assert runner.current_model_id == "deepseek-ai/DeepSeek-V4.1-Flash-1017"
+
+
+def test_deepinfra_accessor_tracks_set_model():
+    import asyncio
+
+    from runners.deepinfra import DeepInfraRunner
+
+    runner = DeepInfraRunner(model="deepseek-ai/DeepSeek-V4.1-Flash-1017")
+    asyncio.run(runner.set_model("openai/gpt-oss-120b"))
+    assert runner.current_model_id == "openai/gpt-oss-120b"
+
+
+def test_fireworks_reports_active_model_id():
+    from runners.fireworks import FireworksRunner
+
+    runner = FireworksRunner(model="gpt-oss-20b")
+    # resolve_model expands a bare name to the accounts/... suffix; whatever it
+    # resolves to, the accessor and the resolution agree.
+    assert runner.current_model_id == runner._model.model_id
+    assert runner.current_model_id  # non-empty
+
+
+def test_local_reports_active_model_id():
+    from runners.local import LocalRunner
+
+    runner = LocalRunner(name="ollama", base_url="http://x", model="qwen3:14b")
+    assert runner.current_model_id == "qwen3:14b"
+
+
+def test_claude_reports_empty_model_id():
+    from runners.claude import ClaudeRunner
+
+    assert ClaudeRunner().current_model_id == ""
+
+
+def test_accessor_beats_getattr_for_deepinfra():
+    """The bug: getattr(runner, 'model', '') was '' for DeepInfra."""
+    from runners.deepinfra import DeepInfraRunner
+
+    runner = DeepInfraRunner(model="deepseek-ai/DeepSeek-V4.1-Flash-1017")
+    assert getattr(runner, "model", "") == ""  # the OLD derivation -> empty
+    assert runner.current_model_id  # the NEW accessor -> the real id
+
+
+# --------------------------------------------------------------------------
+# DeepSeek V3/V4 in the registry (previously fell through to "unknown")
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+        "deepseek-ai/DeepSeek-V4-Flash-0731",
+        "deepseek-ai/DeepSeek-V3.1",
+    ],
+)
+def test_deepseek_v3_v4_registered_as_model_variant(model):
+    """V3/V4 are reasoning-capable but carry no reasoning_effort tag.
+
+    So they must resolve to model_variant (no parameter sent), not unknown.
+    """
+    resolution = resolve("deepinfra", model)
+    assert resolution.in_registry is True
+    assert resolution.style == "model_variant"
+    assert build_request_kwargs(resolution, "high", model) == {}
+
+
+def test_r1_and_gptoss_still_use_reasoning_effort_after_v4_entry():
+    """Guard: adding V3/V4 must not shadow the earlier effort-style patterns."""
+    assert resolve("deepinfra", "deepseek-ai/DeepSeek-R1-0528").style == "reasoning_effort"
+    assert resolve("deepinfra", "openai/gpt-oss-120b").style == "reasoning_effort"
