@@ -7,12 +7,10 @@ AgentDB is enabled by default. These tests pin the policy from the spec:
 - enabled and healthy -> builds AgentDB, calls runner.init_agentdb, runs a sweep.
 """
 import sys
-import types
 import unittest
 from pathlib import Path
 import tempfile
 
-import core.agentdb as agentdb_mod
 from core.agentdb import AgentDBInitError, init_agentdb_for
 
 
@@ -68,7 +66,8 @@ class TestInitAgentDBFor(unittest.TestCase):
     def test_healthy_wires_runner_and_runs_sweep(self):
         # Use the real, installed agentdb package + a real permissions file.
         try:
-            import agentdb  # noqa: F401
+            import agentdb
+            _ = agentdb.AgentDB  # presence check
         except Exception:
             self.skipTest("agentdatabase not installed")
         runner = _Runner()

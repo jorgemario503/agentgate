@@ -1,6 +1,4 @@
 """Tests for core/config.py — centralized env var loading."""
-import os
-import pytest
 
 
 def test_blocked_patterns_not_empty():
