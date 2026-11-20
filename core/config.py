@@ -119,7 +119,7 @@ REPO_MAP_MAX_TOKENS = int(os.environ.get("AGENTGATE_REPO_MAP_MAX_TOKENS", 1500))
 # (local / fireworks / deepinfra). Claude and AgentDB are excluded by design.
 # With AGENTGATE_SKILLS_ENABLED=false (the default) nothing here is consulted,
 # and outbound requests are byte-for-byte unchanged.
-# See docs/skills/DECISIONS.md.
+# See docs/spec/skills/DECISIONS.md.
 # -------------------------
 AGENTGATE_SKILLS_ENABLED = _env_bool("AGENTGATE_SKILLS_ENABLED")
 # One operator-configured catalog shared by all open-model runners.
