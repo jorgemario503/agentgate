@@ -137,13 +137,25 @@ on all three: it is a top-level JSON field on the wire, a first-class SDK
 parameter, and a top-level key under raw httpx alike.
 
 The `extra_body` style (`{"extra_body": {"reasoning": {"effort": level}}}`) is
-valid only for the SDK transports, where `extra_body` is an SDK kwarg the client
-unwraps into the request body. On the raw-httpx **local** runner the same dict
-would be sent as a literal `extra_body` JSON field, which is wrong. This is
-currently **latent**: no registry entry uses the `extra_body` style. If one is
-added for a model served by the local runner, the merge for that transport must
-be adjusted (unwrap `extra_body` into the payload) rather than sending it
-verbatim.
+an SDK convention: the OpenAI client merges `extra_body` into the request body,
+but a raw httpx caller would otherwise send a literal `extra_body` field. The
+local runner unwraps it (`_unwrap_extra_body`) so all three transports produce
+the same flat wire body. No registry entry currently uses `extra_body`; the
+unwrap exists so that adding one for a local-served model just works.
 
-The verify path (`_record_reasoning` -> `extract_reasoning_content` ->
-`classify_outcome`) is symmetric across all three runners.
+### Failures: rejected vs. failed
+
+`classify_outcome` splits a failed request two ways, because they need
+different handling:
+
+- `rejected` — the provider refused the *reasoning parameter* (a 4xx carrying a
+  rejection hint such as `unknown field reasoning_effort`). Retrying without the
+  parameter succeeds, so the runners set the thread's level to `off`.
+- `failed` — anything else (429, 5xx, timeout, connection error). The failure is
+  unrelated to the reasoning parameter, so **the level is left on** and only the
+  error is surfaced.
+
+Collapsing both to `rejected` (the earlier behaviour) meant a single transient
+rate-limit silently disabled reasoning for the rest of the session; the split
+prevents that. The verify path (`_record_reasoning` -> `extract_reasoning_content`
+-> `classify_outcome`) is otherwise symmetric across all three runners.

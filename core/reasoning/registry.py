@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 ReasoningLevel = Literal["off", "low", "medium", "high"]
-ReasoningState = Literal["unknown", "verified", "unverified", "rejected"]
+ReasoningState = Literal["unknown", "verified", "unverified", "rejected", "failed"]
 
 REASONING_LEVELS: tuple[str, ...] = ("off", "low", "medium", "high")
 

@@ -118,11 +118,25 @@ def classify_outcome(
     error_message: str,
     reasoning_text: str,
 ) -> tuple[str, str]:
-    """Map one turn's outcome to (state, human detail)."""
+    """Map one turn's outcome to (state, human detail).
+
+    A failure is split two ways because they call for different handling:
+
+    ``rejected``  the provider refused the *reasoning parameter* (HTTP 400 with
+                  a rejection hint). Retrying without it succeeds, so callers
+                  may disable reasoning for the thread.
+    ``failed``    anything else -- 429, 5xx, timeout, network. The failure is
+                  unrelated to the reasoning parameter, so reasoning must NOT
+                  be disabled because of it; the caller should just surface the
+                  error and leave the setting alone.
+
+    Collapsing both to ``rejected`` (the previous behaviour) meant one transient
+    rate-limit silently turned reasoning off for the rest of the session.
+    """
     if request_failed:
         if looks_like_rejection(error_message):
             return "rejected", f"❌ Reasoning rejected — {error_message[:200]}"
-        return "rejected", f"❌ Reasoning request failed — {error_message[:200]}"
+        return "failed", f"❌ Reasoning request failed — {error_message[:200]}"
     if reasoning_text:
         return "verified", "✓ Reasoning verified — the model returned reasoning content."
     return (

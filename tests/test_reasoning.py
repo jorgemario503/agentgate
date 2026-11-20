@@ -116,11 +116,32 @@ def test_outcome_rejected_when_provider_rejects_parameter():
     assert "rejected" in detail.lower()
 
 
-def test_outcome_rejected_for_generic_failure():
-    state, _ = classify_outcome(
+def test_outcome_failed_for_generic_failure_not_rejected():
+    """A 5xx/timeout/429 is a *failed* request, not a reasoning rejection.
+
+    Collapsing these to "rejected" made the runners disable reasoning on any
+    transient error. Only a real parameter rejection may turn reasoning off.
+    """
+    state, detail = classify_outcome(
         request_failed=True, error_message="500 boom", reasoning_text=""
     )
-    assert state == "rejected"
+    assert state == "failed"
+    assert "failed" in detail.lower()
+
+
+@pytest.mark.parametrize(
+    "msg",
+    [
+        "429 Too Many Requests",
+        "ReadTimeout: the request timed out",
+        "500 Internal Server Error",
+        "502 Bad Gateway",
+        "Connection reset by peer",
+    ],
+)
+def test_transient_failures_are_not_classified_as_rejection(msg):
+    state, _ = classify_outcome(request_failed=True, error_message=msg, reasoning_text="")
+    assert state == "failed", f"{msg!r} must not disable reasoning"
 
 
 # --------------------------------------------------------------------------

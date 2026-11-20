@@ -385,6 +385,24 @@ def _safe_json_args(raw: Optional[str]) -> dict:
         return {}
 
 
+def _unwrap_extra_body(kwargs: dict) -> dict:
+    """Flatten a reasoning `extra_body` entry into the top-level request body.
+
+    The OpenAI SDK exposes `extra_body={...}` as a kwarg it merges into the JSON
+    body automatically. The local runner talks raw httpx, so passing the same
+    dict through would send a literal ``"extra_body"`` field, which no
+    OpenAI-compatible server expects. Unwrap it here so all three transports
+    produce the same wire body. Non-extra_body keys pass through unchanged.
+    """
+    extra = kwargs.get("extra_body")
+    if not isinstance(extra, dict):
+        return kwargs
+    rest = {k: v for k, v in kwargs.items() if k != "extra_body"}
+    merged = dict(extra)
+    merged.update(rest)  # an explicit top-level key wins over the nested one
+    return merged
+
+
 class LocalAgentClient:
     def __init__(
         self,
@@ -573,7 +591,7 @@ class LocalAgentClient:
         if state.level == "off":
             return {}
         resolution = resolve_reasoning("local", self.model)
-        return build_request_kwargs(resolution, state.level, self.model)
+        return _unwrap_extra_body(build_request_kwargs(resolution, state.level, self.model))
 
     def _record_reasoning(self, data: dict) -> None:
         state = self._reasoning_state()
