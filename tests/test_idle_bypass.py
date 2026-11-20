@@ -28,9 +28,6 @@ class FakeRunner:
     def list_pending_conflicts(self):
         return []
 
-    def list_pending_proposals(self, status="pending"):
-        return []
-
 
 @pytest.fixture(autouse=True)
 def _reset():

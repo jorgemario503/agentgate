@@ -177,19 +177,3 @@ class Runner(Protocol):
     def list_pending_conflicts(self) -> list:
         """Read-only view into AgentDB's conflict queue."""
         ...
-
-    def list_pending_proposals(self, status: str = "pending") -> list[dict]:
-        """List AgentDB skill proposals by status."""
-        ...
-
-    def propose_skill(self, name: str, content: str) -> str:
-        """Draft an AgentDB skill proposal. Returns the proposal_id."""
-        ...
-
-    def approve_skill_proposal(self, proposal_id: str) -> None:
-        """Approve a pending AgentDB skill proposal."""
-        ...
-
-    def reject_skill_proposal(self, proposal_id: str, reason: str | None = None) -> None:
-        """Reject a pending AgentDB skill proposal."""
-        ...

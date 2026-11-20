@@ -40,10 +40,10 @@ def test_telegram_and_slack_have_same_scopes(doc):
     assert slack["can_read"] == telegram["can_read"]
 
 
-def test_all_agents_can_write_proposals(doc):
+def test_all_agents_can_write_core_memory(doc):
     for agent_id, scope in doc["agents"].items():
-        assert "proposal/" in scope["can_write"], (
-            f"agents.{agent_id} needs proposal/ write access for AgentDB skill proposals"
+        assert "memory/working/" in scope["can_write"], (
+            f"agents.{agent_id} needs memory/working/ write access for governed memory"
         )
 
 

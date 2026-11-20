@@ -26,7 +26,7 @@ core/
   prompts/       # prompt assembly                   prompts.py
   sessions/      # session registry + history        sessions.py, history.py
   tools/         # shared tool registry  (DONE)      registry.py
-  agentdb/       # governed memory + skills surface  agentdb.py
+  agentdb/       # governed memory surface           agentdb.py
   context/       # token efficiency                  artifacts, dedup, tool_compression,
                                                      tool_pipeline, repo_map, compression
   commands/      # command registry                  commands.py

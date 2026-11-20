@@ -823,23 +823,11 @@ class LocalRunner:
         self._agentdb_middleware = AgentDBMiddleware(
             db=db, agent_id=platform.agent_id, capabilities=LOCAL_CAPABILITIES
         )
-        self._agentdb_api.bind(self._agentdb_middleware, platform.agent_id)
+        self._agentdb_api.bind(self._agentdb_middleware)
 
     # --- AgentDB shared surfaces (see core/agentdb.py) -------------------
     def list_pending_conflicts(self) -> list:
         return self._agentdb_api.list_pending_conflicts()
-
-    def list_pending_proposals(self, status: str = "pending") -> list[dict]:
-        return self._agentdb_api.list_pending_proposals(status=status)
-
-    def propose_skill(self, name: str, content: str) -> str:
-        return self._agentdb_api.propose_skill(name=name, content=content)
-
-    def approve_skill_proposal(self, proposal_id: str) -> None:
-        self._agentdb_api.approve_proposal(proposal_id)
-
-    def reject_skill_proposal(self, proposal_id: str, reason=None) -> None:
-        self._agentdb_api.reject_proposal(proposal_id, reason=reason)
 
     async def cancel(self, thread_id: str) -> bool:
         task = self._current_tasks.get(thread_id)

@@ -160,7 +160,6 @@ class ClaudeRunner:
         self._clients: dict[str, ClaudeSDKClient] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._agentdb_middleware = None
-        self._agent_id: str = "agent"
         self._interrupt_requested: set[str] = set()
         # Needed so close_client can hand AgentDB a session-summary path.
         self._session_workspace_paths: dict[str, str] = {}
@@ -192,7 +191,6 @@ class ClaudeRunner:
                 f"AgentDB is enabled but its adapters could not be imported: {e}. "
                 "Reinstall 'agentdatabase' or set AGENTDB_ENABLED=false."
             ) from e
-        self._agent_id = platform.agent_id
         self._agentdb_middleware = AgentDBMiddleware(
             db=db, agent_id=platform.agent_id, capabilities=CLAUDE_CAPABILITIES
         )
@@ -201,28 +199,6 @@ class ClaudeRunner:
         if self._agentdb_middleware is None:
             raise RuntimeError("AgentDB not initialized — call init_agentdb first")
         return self._agentdb_middleware.pending_conflicts()
-
-    def list_pending_proposals(self, status: str = "pending") -> list[dict]:
-        if self._agentdb_middleware is None:
-            raise RuntimeError("AgentDB not initialized — call init_agentdb first")
-        return self._agentdb_middleware.list_proposals(status=status)
-
-    def propose_skill(self, name: str, content: str) -> str:
-        if self._agentdb_middleware is None:
-            raise RuntimeError("AgentDB not initialized — call init_agentdb first")
-        return self._agentdb_middleware.propose_skill(
-            name=name, content=content, scope=[self._agent_id]
-        )
-
-    def approve_skill_proposal(self, proposal_id: str) -> None:
-        if self._agentdb_middleware is None:
-            raise RuntimeError("AgentDB not initialized — call init_agentdb first")
-        self._agentdb_middleware.approve_proposal(proposal_id)
-
-    def reject_skill_proposal(self, proposal_id: str, reason=None) -> None:
-        if self._agentdb_middleware is None:
-            raise RuntimeError("AgentDB not initialized — call init_agentdb first")
-        self._agentdb_middleware.reject_proposal(proposal_id, reason=reason)
 
     async def cancel(self, thread_id: str) -> bool:
         lock = self._locks.get(thread_id)

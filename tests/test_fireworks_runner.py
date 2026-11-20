@@ -23,9 +23,7 @@ def test_fireworks_runner_importable():
 def test_fireworks_runner_has_required_methods():
     from runners.fireworks import FireworksRunner
     for method in ("run_prompt", "cancel", "close_client", "close_all",
-                   "has_client", "init_agentdb", "list_pending_conflicts",
-                   "list_pending_proposals", "propose_skill",
-                   "approve_skill_proposal", "reject_skill_proposal"):
+                   "has_client", "init_agentdb", "list_pending_conflicts"):
         assert hasattr(FireworksRunner, method), f"FireworksRunner missing {method}"
 
 

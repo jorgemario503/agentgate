@@ -167,10 +167,6 @@ Declared once in `core/commands.py`; `/help` is generated from the registry.
 | `/status` | Show session status |
 | `/cancel` | Interrupt the in-flight agent turn |
 | `/conflicts` | List pending AgentDB memory conflicts |
-| `/proposals` | List pending skill proposals |
-| `/propose <name> <content>` | Draft a new skill proposal |
-| `/approve <proposal_id>` | Approve a proposal (admins only) |
-| `/reject <proposal_id> [reason]` | Reject a proposal (admins only) |
 | `/autoapprove on\|off` | Toggle auto-approval for this chat (admins only) |
 | `/idle start\|stop` | `stop` skips the idle reaper; `start` restores normal expiry |
 | `/reasoning off\|low\|medium\|high` | Set reasoning effort for this chat |
@@ -336,7 +332,7 @@ Telegram identities can also use per-bot suffixes
 (`ALLOWED_TELEGRAM_USER_IDS_WORK`), which fall back to the unsuffixed vars when
 absent.
 
-Admins can approve/reject AgentDB skill proposals and toggle auto-approval.
+Admins can toggle auto-approval.
 Allowlists fail **open** when empty; admin lists fail **closed**.
 
 ---
@@ -360,8 +356,7 @@ history from disk by thread id.
 ## AgentDB (governed memory — enabled by default)
 
 AgentDB ships with the app (see `requirements.txt`) and is **on by default**:
-the agent gains persistent cross-session memory, skill proposals, and the
-`/propose` `/approve` workflow, all governed by
+the agent gains persistent cross-session memory, governed by
 [`permissions.yaml`](permissions.yaml).
 
 Configuration via `.env` (defaults shown):
@@ -374,8 +369,8 @@ AGENTDB_PERMISSIONS_PATH=./permissions.yaml
 
 Startup **fails loudly** with an actionable message if the package, the
 permissions file, or the memory dir is missing. To run deliberately without
-governed memory, set `AGENTDB_ENABLED=false` (memory and skill commands are then
-unavailable).
+governed memory, set `AGENTDB_ENABLED=false` (governed memory and the
+`/conflicts` command are then unavailable).
 
 For semantic retrieval, set `embeddings: {enabled: true}` in
 `<AGENTDB_MEMORY_DIR>/config/memory.yaml` and install
