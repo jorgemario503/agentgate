@@ -41,6 +41,18 @@ from runners.base import (
     _describe_ask_user_question, _resolve_ask_user_answer, _describe_tool_call,
 )
 
+def _cfg_repo_map_enabled() -> bool:
+    import core.config as _c
+    return bool(getattr(_c, "REPO_MAP_ENABLED", False))
+
+
+
+def _cfg_tool_compression_enabled() -> bool:
+    """Whether native tool-result compression is enabled (read lazily)."""
+    import core.config as _c
+    return bool(_c.TOOL_COMPRESSION_ENABLED)
+
+
 
 # ---------------------------------------------------------------------------
 # Model resolution
@@ -312,10 +324,10 @@ def _make_remember_directory(store) -> Callable[[dict], str]:
 _ALWAYS_ALLOW_TOOLS = {"lookup_directory", "remember_directory"}
 
 
-def build_tools(workspace_path: str, store) -> dict[str, Tool]:
+def build_tools(workspace_path: str, store, pipeline=None) -> dict[str, Tool]:
     def t(name, desc, params, required, handler):
         return Tool(schema=_tool_schema(name, desc, params, required), handler=handler)
-    return {
+    tools = {
         "Bash": t(
             "Bash", "Run a shell command in the session workspace.",
             {"command": {"type": "string"}}, ["command"], _make_bash(workspace_path),
@@ -355,6 +367,18 @@ def build_tools(workspace_path: str, store) -> dict[str, Tool]:
             ["name", "path"], _make_remember_directory(store),
         ),
     }
+    if pipeline is not None:
+        from core.tool_pipeline import tool_result_read_handler
+        tools["tool_result_read"] = t(
+            "tool_result_read",
+            "Retrieve the exact original text of a compressed tool result by its "
+            "artifact id (bounded by offset/limit).",
+            {"artifact_id": {"type": "string"},
+             "offset": {"type": "integer"},
+             "limit": {"type": "integer"}},
+            ["artifact_id"], tool_result_read_handler(pipeline),
+        )
+    return tools
 
 
 # ---------------------------------------------------------------------------
@@ -429,6 +453,7 @@ class DeepInfraAgentClient:
         max_tool_iterations: int = settings_for("deepinfra").max_tool_iterations,
         context_window: int | None = DEFAULT_CONTEXT_WINDOW,
         on_compact: Optional[Callable[[str], None]] = None,
+        tool_pipeline=None,
     ):
         self.model = model
         self.context_window = context_window
@@ -454,6 +479,7 @@ class DeepInfraAgentClient:
         self.messages: list[dict] = []
         self._ephemeral_context: Optional[str] = None
         self.on_compact = on_compact
+        self._tool_pipeline = tool_pipeline
 
     async def connect(self) -> None:
         self.messages = apply_system_prompt(
@@ -754,6 +780,9 @@ class DeepInfraAgentClient:
                         result_text = await self._run_handler(tool, args)
                 else:
                     result_text = await self._run_handler(tool, args)
+                if self._tool_pipeline is not None:
+                    result_text = self._tool_pipeline.process(
+                        result_text, tool_name=name)
                 cap = self._max_tool_result_chars
                 if len(result_text) > cap:
                     print(f"[deepinfra] tool '{name}' returned {len(result_text):,} chars "
@@ -1006,10 +1035,16 @@ class DeepInfraRunner:
                     )
                 except Exception as e:
                     print(f"[agentdb] compaction persist error: {e}")
+        _tool_pipeline = None
+        if _cfg_tool_compression_enabled():
+            from core.tool_pipeline import ToolResultPipeline
+            _tool_pipeline = ToolResultPipeline(
+                store.base, session_id=thread_id, workspace_id=workspace_path,
+            )
         client = DeepInfraAgentClient(
             model=self._model.model_id,
             context_window=self._model.context_window,
-            tools=build_tools(workspace_path, store),
+            tools=build_tools(workspace_path, store, _tool_pipeline),
             system_prompt=system_prompt,
             can_use_tool=_make_permission_callback(
                 thread_id, post_fn, platform, self._interrupt_requested,
@@ -1017,6 +1052,7 @@ class DeepInfraRunner:
             session_id=thread_id,
             session_store=history_store,
             on_compact=on_compact,
+            tool_pipeline=_tool_pipeline,
         )
         await client.connect()
         self._clients[thread_id] = client
@@ -1062,6 +1098,14 @@ class DeepInfraRunner:
                             "## Relevant memory for this turn\n"
                             + "\n\n".join(memory_parts)
                         )
+                if _cfg_repo_map_enabled():
+                    try:
+                        from core.repo_map import build_repo_map_segment
+                        _seg = build_repo_map_segment(workspace_path)
+                        if _seg:
+                            memory_context = ((memory_context + "\n\n") if memory_context else "") + _seg
+                    except Exception:
+                        pass
                 await client.query(prompt, ephemeral_context=memory_context)
                 text_parts: list[str] = []
                 async for message in client.receive_response():
