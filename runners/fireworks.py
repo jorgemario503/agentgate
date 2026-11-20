@@ -49,6 +49,11 @@ from runners.base import (
     _describe_ask_user_question, _resolve_ask_user_answer, _describe_tool_call,
 )
 
+def _cfg_repo_map_enabled() -> bool:
+    import core.config as _c
+    return bool(getattr(_c, "REPO_MAP_ENABLED", False))
+
+
 
 def _cfg_tool_compression_enabled() -> bool:
     """Whether native tool-result compression is enabled (read lazily)."""
@@ -1185,6 +1190,14 @@ class FireworksRunner:
                             + "\n\n".join(memory_parts)
                         )
 
+                if _cfg_repo_map_enabled():
+                    try:
+                        from core.repo_map import build_repo_map_segment
+                        _seg = build_repo_map_segment(workspace_path)
+                        if _seg:
+                            memory_context = ((memory_context + "\n\n") if memory_context else "") + _seg
+                    except Exception:
+                        pass
                 await client.query(prompt, ephemeral_context=memory_context)
 
                 text_parts: list[str] = []

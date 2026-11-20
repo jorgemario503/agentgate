@@ -108,6 +108,10 @@ TOOL_ARTIFACT_DIR = os.environ.get("AGENTGATE_TOOL_ARTIFACT_DIR", "")
 # C2: deterministic cross-turn deduplication of repeated tool results.
 CROSS_TURN_DEDUP_ENABLED = _env_bool("AGENTGATE_CROSS_TURN_DEDUP_ENABLED")
 
+# C3: Python-first incremental repository map (context injection).
+REPO_MAP_ENABLED = _env_bool("AGENTGATE_REPO_MAP_ENABLED")
+REPO_MAP_MAX_TOKENS = int(os.environ.get("AGENTGATE_REPO_MAP_MAX_TOKENS", 1500))
+
 # -------------------------
 # SECURITY LAYER 1 — hard blocks on both user messages and generated Bash commands
 # -------------------------

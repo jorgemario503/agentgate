@@ -89,6 +89,28 @@ copy is canonical, index persists across restart, scoped per session+workspace
 messages never change (prefix-stable). Composes with compression: a duplicate
 short-circuits to the pointer; a first occurrence goes through compression.
 
+## Repository map (C3, optional)
+
+When `AGENTGATE_REPO_MAP_ENABLED=true` and the workspace is a git repository,
+AgentGate injects a small, deterministic **repo map** at session start: language
+breakdown, top-level dirs, and Python classes/functions with `file:line` and
+signatures. It is added as *ephemeral per-session context* (a system-role
+message just before the user turn), so the cacheable system-prompt prefix is
+not disturbed.
+
+- **Safe scanning:** root-confined, honours `.gitignore` plus a default deny
+  list (VCS dirs, `.env`/key/credential files, vendored deps, build output,
+  caches, binaries). Oversize and binary files are skipped, not guessed. Project
+  code is parsed with `ast` and **never executed**.
+- **Incremental:** a per-file content-hash manifest is persisted; unchanged
+  files are reused across restarts, changed/added/deleted files update the map.
+- **Bounded:** rendered to a token budget (`AGENTGATE_REPO_MAP_MAX_TOKENS`).
+- **Exact source stays on demand:** the map is an overview; the model reads
+  exact bytes with the existing `Read`/`Grep` tools (no new broad-access tool,
+  so secret/ignore protections are unchanged).
+- Syntax errors are reported in the map (`parse_failures()`) and the scan
+  continues; a failed map build yields no segment (normal context unchanged).
+
 ## Where it lives
 
 | Module | Role |
