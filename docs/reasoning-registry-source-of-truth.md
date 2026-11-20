@@ -68,13 +68,30 @@ the old hand-list could not express, which is why the model "was not found".
 
 ## What this enables
 
-A refresh can be driven from the catalog rather than hand-edited:
+A refresh is driven from the catalog rather than hand-edited:
 
 1. Fetch `/models`.
 2. For each model, read `metadata.tags`.
 3. Map `reasoning_effort` -> style `reasoning_effort`, `reasoning` (only) ->
    style `model_variant`, otherwise skip.
-4. Regenerate the `deepinfra` block of `REGISTRY` from that mapping.
+4. Write the result to `core/reasoning/registry_generated.py`, which
+   `registry.py` appends *after* its hand-written patterns.
+
+## The tool
+
+`scripts/refresh_reasoning_registry.py` implements the refresh:
+
+```bash
+python scripts/refresh_reasoning_registry.py           # show the diff
+python scripts/refresh_reasoning_registry.py --apply   # write the fragment
+```
+
+It fetches the catalog (key resolved through `core.providers`, same as a bot),
+maps tags to styles, and diffs against the current generated fragment, printing
+`+`/`-`/`~` lines. `--apply` rewrites `core/reasoning/registry_generated.py`
+with a provenance header (endpoint + UTC timestamp). The fragment is imported by
+`registry.py` and layered **under** the hand-written patterns, so an explicit
+human entry always wins.
 
 ## Why not make it fully automatic at runtime
 
@@ -85,13 +102,8 @@ The registry is intentionally a *static, reviewable* artifact:
 - A static list is what makes the "unknown -> warn, don't silently send"
   behaviour auditable: you can see exactly what we claim to support.
 
-So the recommended shape is a **refresh tool**, not a live lookup:
-
-- `scripts/refresh_reasoning_registry.py` (or a `--refresh-registry` mode on a
-  maintenance entrypoint) that fetches the catalog, prints the diff against the
-  current `REGISTRY`, and writes the updated `deepinfra` block on `--apply`.
-- The generated block carries a header noting it was machine-generated and from
-  which endpoint/date, so a reviewer can see provenance.
+So the catalog is consulted **deliberately**, by the tool, and its output is
+reviewed like any other code change — not on every request.
 
 Fireworks already queries its catalog for `context_length`
 (`runners/fireworks.py`, `set_model`), so the "call the provider catalog" pattern
@@ -99,12 +111,39 @@ is established; this extends the same idea to the reasoning tags.
 
 ## Recommendation
 
-1. **Now:** document the tag mapping (this file) and add
-   `deepseek-ai/DeepSeek-V4.1-Flash-1017` by hand as `model_variant`, matching
-   its actual tag — until the tool exists.
-2. **Next:** a small refresh tool that turns the catalog tags into the registry
-   block, run deliberately (not at runtime), with its output reviewed like any
-   other code change.
+1. **Now (done):** the tag mapping is documented here and encoded in
+   `scripts/refresh_reasoning_registry.py`; `core/reasoning/registry_generated.py`
+   is generated from the live catalog. The DeepSeek V3/V4 families are no longer
+   hand-maintained — the generated fragment records their real tags (V3.1 carries
+   `reasoning_effort`, V4.x carries `reasoning` only).
+2. **Ongoing:** re-run the tool when a provider ships new models, review the
+   diff, commit the regenerated fragment. The tag vocabulary is the source of
+   truth; the registry is a reviewed snapshot of it.
 
-The tag vocabulary is the source of truth; the registry is a reviewed snapshot
-of it.
+## Execution notes (how a resolved style reaches the request)
+
+`resolve(provider, model)` -> `build_request_kwargs(resolution, level, model)`
+is shared by all three open-model runners. The resulting kwargs are merged into
+the outgoing request by one of two transports:
+
+| Runner    | Transport                         | Merge                      |
+|-----------|-----------------------------------|----------------------------|
+| local     | raw `httpx` (`json=payload`)      | `payload.update(kwargs)`   |
+| deepinfra | OpenAI SDK `chat.completions.create(**kwargs)` | `kwargs.update(...)` |
+| fireworks | OpenAI SDK `chat.completions.create(**kwargs)` | `kwargs.update(...)` |
+
+For the `reasoning_effort` style (`{"reasoning_effort": level}`) this is correct
+on all three: it is a top-level JSON field on the wire, a first-class SDK
+parameter, and a top-level key under raw httpx alike.
+
+The `extra_body` style (`{"extra_body": {"reasoning": {"effort": level}}}`) is
+valid only for the SDK transports, where `extra_body` is an SDK kwarg the client
+unwraps into the request body. On the raw-httpx **local** runner the same dict
+would be sent as a literal `extra_body` JSON field, which is wrong. This is
+currently **latent**: no registry entry uses the `extra_body` style. If one is
+added for a model served by the local runner, the merge for that transport must
+be adjusted (unwrap `extra_body` into the payload) rather than sending it
+verbatim.
+
+The verify path (`_record_reasoning` -> `extract_reasoning_content` ->
+`classify_outcome`) is symmetric across all three runners.

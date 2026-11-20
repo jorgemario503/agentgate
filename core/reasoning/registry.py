@@ -58,11 +58,10 @@ REGISTRY: dict[str, list[tuple[str, ModelReasoning]]] = {
         ("deepseek-r1*", ModelReasoning("reasoning_effort", notes="DeepSeek R1 reasoning model")),
         ("deepseek-ai/DeepSeek-R1*", ModelReasoning("reasoning_effort")),
         ("*r1*", ModelReasoning("reasoning_effort")),
-        # DeepSeek V3.1/V4 are reasoning-capable but, per DeepInfra's catalog
-        # tags, carry `reasoning` without `reasoning_effort` -- so no depth
-        # parameter: style is model_variant. (docs/reasoning-registry-source-of-truth.md)
-        ("deepseek-ai/DeepSeek-V3*", ModelReasoning("model_variant", notes="reasoning-capable, no effort param")),
-        ("deepseek-ai/DeepSeek-V4*", ModelReasoning("model_variant", notes="reasoning-capable, no effort param")),
+        # DeepSeek V3/V4 are covered by the generated fragment (registry_generated.py),
+        # which records the catalog's own tags: V3.1 carries reasoning_effort, V4.x
+        # carries reasoning only. Kept out of the hand list so the catalog stays the
+        # single source of truth for these (docs/reasoning-registry-source-of-truth.md).
         # gpt-oss supports reasoning_effort low|medium|high.
         ("*gpt-oss*", ModelReasoning("reasoning_effort")),
         ("*kimi-k2*thinking*", ModelReasoning("reasoning_effort")),
@@ -85,6 +84,25 @@ REGISTRY: dict[str, list[tuple[str, ModelReasoning]]] = {
         ("*thinking*", ModelReasoning("reasoning_effort")),
     ],
 }
+
+
+def _with_generated(provider: str, entries: list[tuple[str, ModelReasoning]]) -> list[tuple[str, ModelReasoning]]:
+    """Append the machine-generated patterns for `provider` after the hand-written ones.
+
+    Generated entries are exact model ids (see scripts/refresh_reasoning_registry.py),
+    so they are the most specific possible match and never shadow a hand-written
+    wildcard that a human deliberately placed first. A missing generated module
+    is not an error: the hand-written patterns still work.
+    """
+    try:
+        from core.reasoning import registry_generated as _gen
+    except Exception:
+        return entries
+    generated = getattr(_gen, f"{provider.upper()}_GENERATED", [])
+    return entries + list(generated)
+
+
+REGISTRY["deepinfra"] = _with_generated("deepinfra", REGISTRY["deepinfra"])
 
 
 def lookup(provider: str, model_id: str) -> ModelReasoning | None:

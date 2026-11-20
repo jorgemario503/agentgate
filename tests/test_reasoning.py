@@ -204,27 +204,32 @@ def test_accessor_beats_getattr_for_deepinfra():
 # --------------------------------------------------------------------------
 # DeepSeek V3/V4 in the registry (previously fell through to "unknown")
 # --------------------------------------------------------------------------
+#
+# The generated fragment records the catalog's own tags, and the two DeepSeek
+# families differ: V3.1 carries `reasoning_effort` (depth is tunable), while
+# V4.x carries only `reasoning` (capable, no parameter). Pinned here so a
+# refresh cannot silently collapse the distinction.
 
 @pytest.mark.parametrize(
-    "model",
+    "model,expected",
     [
-        "deepseek-ai/DeepSeek-V4.1-Flash-1017",
-        "deepseek-ai/DeepSeek-V4-Flash-0731",
-        "deepseek-ai/DeepSeek-V3.1",
+        ("deepseek-ai/DeepSeek-V4.1-Flash-1017", "model_variant"),
+        ("deepseek-ai/DeepSeek-V4-Flash-0731", "model_variant"),
+        ("deepseek-ai/DeepSeek-V4-Pro", "model_variant"),
+        ("deepseek-ai/DeepSeek-V3.1", "reasoning_effort"),
     ],
 )
-def test_deepseek_v3_v4_registered_as_model_variant(model):
-    """V3/V4 are reasoning-capable but carry no reasoning_effort tag.
-
-    So they must resolve to model_variant (no parameter sent), not unknown.
-    """
+def test_deepseek_v3_v4_registered_from_catalog(model, expected):
     resolution = resolve("deepinfra", model)
     assert resolution.in_registry is True
-    assert resolution.style == "model_variant"
-    assert build_request_kwargs(resolution, "high", model) == {}
+    assert resolution.style == expected
+    if expected == "reasoning_effort":
+        assert build_request_kwargs(resolution, "high", model) == {"reasoning_effort": "high"}
+    else:
+        assert build_request_kwargs(resolution, "high", model) == {}
 
 
 def test_r1_and_gptoss_still_use_reasoning_effort_after_v4_entry():
-    """Guard: adding V3/V4 must not shadow the earlier effort-style patterns."""
+    """Guard: the DeepSeek entries must not shadow the earlier effort-style patterns."""
     assert resolve("deepinfra", "deepseek-ai/DeepSeek-R1-0528").style == "reasoning_effort"
     assert resolve("deepinfra", "openai/gpt-oss-120b").style == "reasoning_effort"
