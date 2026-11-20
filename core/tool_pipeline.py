@@ -41,10 +41,12 @@ class ToolResultPipeline:
         enabled: Optional[bool] = None,
         min_chars: Optional[int] = None,
         compress_config: Optional[CompressConfig] = None,
+        dedup_enabled: Optional[bool] = None,
     ):
         self.session_id = session_id
         self.workspace_id = workspace_id
         self.enabled = _cfg.TOOL_COMPRESSION_ENABLED if enabled is None else enabled
+        self._dedup_override = dedup_enabled
         self._min_chars = (
             _cfg.TOOL_COMPRESSION_MIN_CHARS if min_chars is None else min_chars
         )
@@ -54,13 +56,38 @@ class ToolResultPipeline:
         root = Path(artifact_root) if artifact_root else Path(base_dir) / "_artifacts"
         self.store = ArtifactStore(root)
 
+        # C2 dedup (optional). Uses the same store so the canonical copy is a
+        # real artifact retrievable via tool_result_read.
+        self.dedup_enabled = (
+            _cfg.CROSS_TURN_DEDUP_ENABLED
+            if self._dedup_override is None else self._dedup_override
+        )
+        self._dedup = None
+        if self.dedup_enabled:
+            try:
+                from core.dedup import DedupIndex
+                self._dedup = DedupIndex(
+                    self.store, session_id=session_id, workspace_id=workspace_id,
+                )
+            except Exception:
+                self._dedup = None
+
     def process(self, text: str, *, tool_name: str = "") -> str:
         """Return model-facing text for a tool result. Never raises."""
-        if not self.enabled:
-            return text
-        if not isinstance(text, str):
-            return text  # type: ignore[return-value]
         try:
+            if self._dedup is not None and isinstance(text, str):
+                from core.dedup import dedup_tool_result
+                deduped = dedup_tool_result(
+                    text, self._dedup, tool_name=tool_name,
+                    min_chars=self._min_chars,
+                )
+                if deduped is not text:
+                    # Duplicate: a short reference. Do not also compress it.
+                    return deduped
+            if not self.enabled:
+                return text
+            if not isinstance(text, str):
+                return text  # type: ignore[return-value]
             outcome = maybe_compress(
                 text,
                 tool_name=tool_name,

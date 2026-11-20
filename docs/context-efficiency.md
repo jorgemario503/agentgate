@@ -71,6 +71,24 @@ The model can recover any part exactly:
 tool_result_read(artifact_id="<64-hex-id>", offset=0, limit=20000)
 ```
 
+## Cross-turn deduplication (C2, optional)
+
+When `AGENTGATE_CROSS_TURN_DEDUP_ENABLED=true`, a tool result whose bytes were
+already produced **verbatim** earlier in the same session is replaced by a
+short pointer to the original instead of being re-sent:
+
+```
+[AgentGate duplicate tool result | identical content already sent earlier in
+ this session | occurrence #2 | original=<id> |
+ retrieve=tool_result_read('<id>', start, limit)]
+```
+
+Properties: exact byte matching only (no near-match folding in v1), earliest
+copy is canonical, index persists across restart, scoped per session+workspace
+(no cross-session exposure), and applied to the *new* result only — earlier
+messages never change (prefix-stable). Composes with compression: a duplicate
+short-circuits to the pointer; a first occurrence goes through compression.
+
 ## Where it lives
 
 | Module | Role |

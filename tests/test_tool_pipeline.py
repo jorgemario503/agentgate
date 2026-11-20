@@ -74,5 +74,43 @@ class TestPipelineScopeIsolation(unittest.TestCase):
                 q.read_original(aid)
 
 
+class TestPipelineDedup(unittest.TestCase):
+    def test_repeat_emits_reference(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = ToolResultPipeline(d, session_id="s", workspace_id="w",
+                                   enabled=False, dedup_enabled=True, min_chars=100)
+            text = "same file bytes\n" * 200
+            first = p.process(text, tool_name="Bash")
+            second = p.process(text, tool_name="Bash")
+            self.assertEqual(first, text)          # first kept whole
+            self.assertLess(len(second), len(text))  # second is a reference
+            self.assertIn("duplicate", second.lower())
+            self.assertIn("original=", second)
+
+    def test_different_not_deduped(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = ToolResultPipeline(d, session_id="s", workspace_id="w",
+                                   enabled=False, dedup_enabled=True, min_chars=100)
+            a = "alpha\n" * 200
+            b = "beta\n" * 200
+            pa = p.process(a, tool_name="Bash")
+            pb = p.process(b, tool_name="Bash")
+            self.assertEqual(pa, a)
+            self.assertEqual(pb, b)
+
+    def test_dedup_and_compression_compose(self):
+        # dedup off-but-compress on, then exact repeat compresses both times
+        with tempfile.TemporaryDirectory() as d:
+            p = ToolResultPipeline(d, session_id="s", workspace_id="w",
+                                   enabled=True, dedup_enabled=True, min_chars=1000)
+            text = _log()
+            first = p.process(text, tool_name="Bash")
+            second = p.process(text, tool_name="Bash")
+            # first compressed; second is a duplicate reference (shorter still)
+            self.assertIn("original=", first)
+            self.assertIn("duplicate", second.lower())
+            self.assertLess(len(second), len(first))
+
+
 if __name__ == "__main__":
     unittest.main()
