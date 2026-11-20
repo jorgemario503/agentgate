@@ -3,6 +3,7 @@ agent-sessions/
 fw_sessions/
 fw_history/
 local_sessions/
+di_sessions/
 ollama_history/
 mlx_history/
 agentdb-workspace/

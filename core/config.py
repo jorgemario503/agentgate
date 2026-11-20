@@ -84,6 +84,30 @@ AGENTDB_ENABLED = os.environ.get("AGENTDB_ENABLED", "false").lower() in ("true",
 AGENTDB_MEMORY_DIR = os.environ.get("AGENTDB_MEMORY_DIR", "agentdb-workspace")
 AGENTDB_PERMISSIONS_PATH = os.environ.get("AGENTDB_PERMISSIONS_PATH", "permissions.yaml")
 
+
+# -------------------------
+# CONTEXT EFFICIENCY (optional; every flag OFF by default)
+#
+# Native token-efficiency features (see docs/spec/). Compression is LOSSY in the
+# model-facing message, but the original is always kept and retrievable, and it
+# is NOT redaction: it never scrubs secrets. With every flag off, outbound
+# requests are byte-for-byte unchanged.
+# -------------------------
+def _env_bool(name, default="false"):
+    return os.environ.get(name, default).strip().lower() in ("true", "1", "yes", "on")
+
+
+# C1: native targeted compression of bulky tool results.
+TOOL_COMPRESSION_ENABLED = _env_bool("AGENTGATE_TOOL_COMPRESSION_ENABLED")
+# Only tool results at least this many chars are considered (advisory).
+TOOL_COMPRESSION_MIN_CHARS = int(os.environ.get("AGENTGATE_TOOL_COMPRESSION_MIN_CHARS", 4000))
+
+# Where originals are kept. "" -> <session-base>/_artifacts (per platform base).
+TOOL_ARTIFACT_DIR = os.environ.get("AGENTGATE_TOOL_ARTIFACT_DIR", "")
+
+# C2: deterministic cross-turn deduplication of repeated tool results.
+CROSS_TURN_DEDUP_ENABLED = _env_bool("AGENTGATE_CROSS_TURN_DEDUP_ENABLED")
+
 # -------------------------
 # SECURITY LAYER 1 — hard blocks on both user messages and generated Bash commands
 # -------------------------
