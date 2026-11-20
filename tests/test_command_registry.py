@@ -22,9 +22,6 @@ class FakeRunner:
     def list_pending_conflicts(self):
         return ["conflict-1"]
 
-    def list_pending_proposals(self, status="pending"):
-        return []
-
 
 @pytest.fixture(autouse=True)
 def _runner():
@@ -58,9 +55,8 @@ def test_aliases_do_not_collide_with_canonical_names():
 
 def test_expected_commands_are_registered():
     names = {spec.name for spec in commands.COMMANDS}
-    assert {"stop", "status", "cancel", "conflicts", "proposals",
-            "propose", "approve", "reject", "autoapprove", "reasoning",
-            "help"} <= names
+    assert {"stop", "status", "cancel", "conflicts", "autoapprove",
+            "reasoning", "help"} <= names
 
 
 # -- parsing ----------------------------------------------------------------
@@ -111,18 +107,18 @@ def test_dispatch_returns_none_for_plain_text():
 
 
 def test_admin_only_command_blocks_non_admin():
-    reply = asyncio.run(commands.dispatch("approve p1", make_ctx(user_id="u1")))
+    reply = asyncio.run(commands.dispatch("autoapprove on", make_ctx(user_id="u1")))
     assert "Only admins" in reply
 
 
 def test_admin_only_command_allows_admin():
-    reply = asyncio.run(commands.dispatch("approve p1", make_ctx(user_id="admin1")))
+    reply = asyncio.run(commands.dispatch("autoapprove on", make_ctx(user_id="admin1")))
     assert "Only admins" not in reply
 
 
 def test_missing_required_args_shows_usage():
-    reply = asyncio.run(commands.dispatch("propose", make_ctx(user_id="admin1")))
-    assert reply.startswith("Usage: propose")
+    reply = asyncio.run(commands.dispatch("autoapprove", make_ctx(user_id="admin1")))
+    assert reply.startswith("Usage: autoapprove")
 
 
 def test_help_lists_every_command():

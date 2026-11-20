@@ -92,61 +92,6 @@ async def conflicts_reply() -> str:
     return "⚠️ Pending conflicts:\n" + "\n".join(lines)
 
 
-async def proposals_reply() -> str:
-    runner = _require_runner()
-    try:
-        proposals = runner.list_pending_proposals()
-    except Exception as e:
-        return f"⚠️ Failed to list proposals: {str(e)[:300]}"
-    if not proposals:
-        return "No pending skill proposals."
-    lines = [f"- `{p['proposal_id']}` {p['name']}" for p in proposals]
-    return "📋 Pending proposals:\n" + "\n".join(lines)
-
-
-async def propose_reply(raw_args: str) -> str:
-    runner = _require_runner()
-    parts = raw_args.strip().split(None, 1)
-    if len(parts) < 2 or not parts[1].strip():
-        return "Usage: propose <name> <content...>"
-    name, content = parts[0], parts[1].strip()
-    try:
-        proposal_id = runner.propose_skill(name=name, content=content)
-    except Exception as e:
-        return f"⚠️ Failed to create proposal: {str(e)[:300]}"
-    return f"📝 Proposal created: `{proposal_id}` — pending admin review."
-
-
-async def approve_reply(raw_args: str, is_admin: bool) -> str:
-    runner = _require_runner()
-    if not is_admin:
-        return "🚫 Only admins can approve proposals."
-    proposal_id = raw_args.strip()
-    if not proposal_id:
-        return "Usage: approve <proposal_id>"
-    try:
-        runner.approve_skill_proposal(proposal_id)
-    except Exception as e:
-        return f"⚠️ Failed to approve: {str(e)[:300]}"
-    return f"✅ Approved `{proposal_id}` — skill created."
-
-
-async def reject_reply(raw_args: str, is_admin: bool) -> str:
-    runner = _require_runner()
-    if not is_admin:
-        return "🚫 Only admins can reject proposals."
-    parts = raw_args.strip().split(None, 1)
-    if not parts or not parts[0]:
-        return "Usage: reject <proposal_id> [reason...]"
-    proposal_id = parts[0]
-    reason = parts[1].strip() if len(parts) > 1 else None
-    try:
-        runner.reject_skill_proposal(proposal_id, reason=reason)
-    except Exception as e:
-        return f"⚠️ Failed to reject: {str(e)[:300]}"
-    return f"🚫 Rejected `{proposal_id}`."
-
-
 async def autoapprove_reply(
     thread_id: str,
     raw_args: str,
@@ -428,22 +373,6 @@ async def _cmd_conflicts(ctx: CommandContext) -> str:
     return await conflicts_reply()
 
 
-async def _cmd_proposals(ctx: CommandContext) -> str:
-    return await proposals_reply()
-
-
-async def _cmd_propose(ctx: CommandContext) -> str:
-    return await propose_reply(ctx.args)
-
-
-async def _cmd_approve(ctx: CommandContext) -> str:
-    return await approve_reply(ctx.args, is_admin=ctx.is_admin)
-
-
-async def _cmd_reject(ctx: CommandContext) -> str:
-    return await reject_reply(ctx.args, is_admin=ctx.is_admin)
-
-
 async def _cmd_autoapprove(ctx: CommandContext) -> str:
     return await autoapprove_reply(
         ctx.thread_id,
@@ -485,13 +414,6 @@ COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec("status", _cmd_status, aliases=("session status",), description="Show session status"),
     CommandSpec("cancel", _cmd_cancel, description="Interrupt the in-flight turn"),
     CommandSpec("conflicts", _cmd_conflicts, description="List pending memory conflicts"),
-    CommandSpec("proposals", _cmd_proposals, description="List pending skill proposals"),
-    CommandSpec("propose", _cmd_propose, takes_args=True, usage="propose <name> <content>",
-                description="Draft a skill proposal"),
-    CommandSpec("approve", _cmd_approve, takes_args=True, admin_only=True, usage="approve <id>",
-                description="Approve a skill proposal"),
-    CommandSpec("reject", _cmd_reject, takes_args=True, admin_only=True, usage="reject <id> [reason]",
-                description="Reject a skill proposal"),
     CommandSpec("autoapprove", _cmd_autoapprove, takes_args=True, admin_only=True,
                 usage="autoapprove on|off", description="Toggle auto-approval"),
     CommandSpec("idle", _cmd_idle, takes_args=True, usage="idle start|stop",
@@ -566,7 +488,7 @@ async def dispatch(text: str, ctx: CommandContext) -> str | None:
     ctx.args = args
     if spec.takes_args and not args and spec.usage:
         # Commands that need input show usage instead of an opaque error.
-        if spec.name in ("propose", "approve", "reject", "autoapprove"):
+        if spec.name == "autoapprove":
             return f"Usage: {spec.usage}"
     return await spec.handler(ctx)
 

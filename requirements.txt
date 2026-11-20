@@ -23,7 +23,8 @@ openai>=1.0.0,<3.0.0
 
 # AgentDB governed memory — required (enabled by default).
 # Distribution name is `agentdatabase`; the import name remains `agentdb`.
-agentdatabase>=0.1.0
+# 0.5.0 is memory-only: skill management APIs were removed from AgentDB core.
+agentdatabase>=0.5.0
 
 # Fireworks runner uses the openai package above — no vendor SDK required.
 

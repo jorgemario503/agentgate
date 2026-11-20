@@ -43,7 +43,7 @@ def init_agentdb_for(runner: Any, platform: Any, *, config: Any) -> None:
     except ImportError as e:  # package not installed
         raise AgentDBInitError(
             "AgentDB is enabled but the 'agentdb' package is not installed. "
-            "Install it with: pip install 'agentdatabase>=0.1.0' "
+            "Install it with: pip install 'agentdatabase>=0.5.0' "
             "or set AGENTDB_ENABLED=false to run without governed memory."
         ) from e
 
@@ -73,18 +73,16 @@ def init_agentdb_for(runner: Any, platform: Any, *, config: Any) -> None:
 
 
 class AgentDBSurface:
-    """Forwards the shared AgentDB query/proposal calls to a middleware instance."""
+    """Forwards the shared AgentDB query calls to a middleware instance."""
 
-    __slots__ = ("_middleware", "_agent_id")
+    __slots__ = ("_middleware",)
 
-    def __init__(self, middleware: Any = None, agent_id: str = "agent") -> None:
+    def __init__(self, middleware: Any = None) -> None:
         self._middleware = middleware
-        self._agent_id = agent_id
 
     # -- wiring ---------------------------------------------------------
-    def bind(self, middleware: Any, agent_id: str) -> None:
+    def bind(self, middleware: Any) -> None:
         self._middleware = middleware
-        self._agent_id = agent_id
 
     @property
     def middleware(self) -> Any:
@@ -98,15 +96,3 @@ class AgentDBSurface:
     # -- shared surfaces ------------------------------------------------
     def list_pending_conflicts(self) -> list:
         return self._require().pending_conflicts()
-
-    def list_pending_proposals(self, status: str = "pending") -> list[dict]:
-        return self._require().list_proposals(status=status)
-
-    def propose_skill(self, name: str, content: str) -> str:
-        return self._require().propose_skill(name=name, content=content, scope=[self._agent_id])
-
-    def approve_proposal(self, proposal_id: str) -> None:
-        self._require().approve_proposal(proposal_id)
-
-    def reject_proposal(self, proposal_id: str, reason: str | None = None) -> None:
-        self._require().reject_proposal(proposal_id, reason=reason)

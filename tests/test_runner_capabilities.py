@@ -17,9 +17,6 @@ def _make_mock_db():
                       "record_line_format": "{key}: {value}"},
         "capture": {"auto_persist_response": False, "conversation_jsonl": False},
     }
-    db.skills = MagicMock()
-    db.skills.search.return_value = []
-    db.skills.get_for_agent.return_value = []
     db.retrieve.return_value = MagicMock(records=[], override_instructions=[])
     db.gateway = MagicMock()
     db.gateway.subscribe = MagicMock()

@@ -18,7 +18,6 @@ human_zone_prefixes:
     - "memory/episodic/"
     - "memory/org/"
     - "config/agent/learned_prefs/"
-    - "proposal/"
   cannot_write:
     - "config/human/"
     - "skills/"
