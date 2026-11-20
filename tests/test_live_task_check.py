@@ -12,6 +12,7 @@ from core.live_task_check import (
     BudgetExceeded,
     TokenBudget,
     live_enabled,
+    run_live_cache_reuse,
     run_task_correctness,
     skip_reason_error,
 )
@@ -92,6 +93,22 @@ class TestLiveTaskCorrectness(unittest.TestCase):
             )
         else:
             self.skipTest(f"case skipped under budget: {report.get('skipped')}")
+
+
+@unittest.skipUnless(
+    os.environ.get("AGENTGATE_LIVE_TESTS", "").strip() in ("1", "true", "yes", "on"),
+    "set AGENTGATE_LIVE_TESTS=1 to run the live DeepInfra cache-reuse probe",
+)
+class TestLiveCacheReuse(unittest.TestCase):
+    def test_repeated_prefix_reports_cached_tokens(self):
+        budget = int(os.environ.get("AGENTGATE_LIVE_TOKEN_BUDGET", "6000"))
+        report = run_live_cache_reuse(budget=budget)
+        self.assertLessEqual(report["used_tokens"], report["budget_limit"])
+        # We do not *require* caching (an implementation detail of the provider);
+        # we only require the measurement to be well-formed and honest.
+        self.assertIn("cache_reuse_observed", report)
+        if len(report["turns"]) == 2:
+            self.assertIn("cached_tokens", report["turns"][1])
 
 
 if __name__ == "__main__":

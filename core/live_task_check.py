@@ -187,5 +187,65 @@ async def _run_async(model: str, budget_limit: int) -> dict:
     return report
 
 
+def run_live_cache_reuse(budget=None) -> dict:
+    """Measure real provider cached_tokens on a repeated-prefix second call.
+
+    Sends the same long, stable prefix twice (only the trailing user question
+    differs) and reports the second call's ``cached_tokens``. This is the live
+    half of H13; it uses the same budget guard as the task-correctness probe.
+    """
+    if not live_enabled():
+        raise skip_reason_error(LIVE_FLAG + " not set")
+    import asyncio
+
+    s = settings_for("deepinfra")
+    model = s.model
+    if not model:
+        raise skip_reason_error("DEEPINFRA_MODEL not set")
+    if budget is None:
+        budget = int(os.environ.get(BUDGET_ENV, DEFAULT_BUDGET))
+    return asyncio.run(_run_cache_async(model, budget))
+
+
+async def _run_cache_async(model: str, budget_limit: int) -> dict:
+    client = _client()
+    budget = TokenBudget(limit=budget_limit)
+    # A long stable prefix + two different trailing questions.
+    prefix = [{"role": "system", "content": "You are terse. " + ("filler sentence. " * 400)}]
+    q1 = prefix + [{"role": "user", "content": "Say OK."}]
+    q2 = prefix + [{"role": "user", "content": "Say DONE."}]
+    report = {"model": model, "budget_limit": budget_limit, "turns": [], "skipped": []}
+    try:
+        for label, msgs in (("turn1", q1), ("turn2", q2)):
+            try:
+                budget.precheck(_est_tokens(json.dumps(msgs)), 20)
+            except BudgetExceeded as e:
+                report["skipped"].append(label + ": " + str(e))
+                continue
+            resp = await client.chat.completions.create(
+                model=model, messages=msgs, max_tokens=20, temperature=0)
+            data = resp.model_dump(exclude_none=True)
+            usage = data.get("usage") or {}
+            budget.record(usage)
+            details = usage.get("prompt_tokens_details") or {}
+            report["turns"].append({
+                "label": label,
+                "prompt_tokens": usage.get("prompt_tokens"),
+                "cached_tokens": details.get("cached_tokens"),
+                "total_tokens": usage.get("total_tokens"),
+            })
+    finally:
+        try:
+            await client.close()
+        except Exception:
+            pass
+        report["used_tokens"] = budget.used
+        report["calls"] = budget.calls
+    # honest verdict: reuse only if the 2nd turn reports cached>0
+    t2 = next((t for t in report["turns"] if t["label"] == "turn2"), None)
+    report["cache_reuse_observed"] = bool(t2 and (t2.get("cached_tokens") or 0) > 0)
+    return report
+
+
 if __name__ == "__main__":
     print(json.dumps(run_task_correctness(), indent=2))

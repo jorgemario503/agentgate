@@ -93,6 +93,24 @@ cached_tokens)` — same report object, no code change. Default-on still require
 that live measurement; the offline result only proves we do not *regress* the
 cacheable prefix.
 
+## Live prefix-cache reuse (H13 stage 2, opt-in)
+
+Run: `AGENTGATE_LIVE_TESTS=1 python -c "from core.live_task_check import run_live_cache_reuse as r; print(r())"`
+
+Two calls with an identical ~1,200-token prefix and a differing trailing
+question, on `deepseek-ai/DeepSeek-V4.1-Flash-1017` (same DEEPINFRA_* env vars):
+
+| turn | prompt_tokens | cached_tokens |
+|---|---|---|
+| 1 | 1214 | 0 |
+| 2 | 1215 | **1152** |
+
+The provider **reused ~95% of the stable prefix** on turn 2. With the offline
+proof that native transforms never rewrite earlier messages, this shows the
+features **preserve** cacheability rather than regress it. Budget: 2,434 / 8,000
+tokens. Caveat: one model/endpoint; caching behavior varies by provider and
+model — measure per deployment before default-on.
+
 ## Live task-correctness (opt-in)
 
 Run: `AGENTGATE_LIVE_TESTS=1 python -c "from core.live_task_check import run_task_correctness as r; print(r())"`
