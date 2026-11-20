@@ -944,8 +944,14 @@ class DeepInfraRunner:
             # Provider-hosted OpenAI-compatible runtime: use the shared serverless
             # capability tier rather than borrowing another vendor's profile.
             from agentdb.adapters.capabilities import SERVERLESS_CAPABILITIES as CAPABILITIES
-        except ImportError:
-            return
+        except ImportError as e:
+            # The package was present (core.agentdb.init_agentdb_for imports
+            # it before calling here), so a failed adapter import is a real
+            # installation problem — surface it instead of silently no-op'ing.
+            raise RuntimeError(
+                f"AgentDB is enabled but its adapters could not be imported: {e}. "
+                "Reinstall 'agentdatabase' or set AGENTDB_ENABLED=false."
+            ) from e
         self._agent_id = platform.agent_id
         self._agentdb = db
         self._agentdb_middleware = AgentDBMiddleware(
