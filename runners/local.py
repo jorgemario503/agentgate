@@ -29,7 +29,6 @@ import httpx
 import core.approvals as approvals
 from core.config import (
     ADDITIONAL_DIRS,
-    AGENTDB_ENABLED,
     BLOCKED_PATTERNS,
     CLAUDE_SETTINGS,
     SDK_ALLOWED_TOOLS,
