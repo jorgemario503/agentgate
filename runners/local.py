@@ -923,6 +923,11 @@ class LocalRunner:
             self.model = value
         return self.model or f"(set {self.name.upper()}_MODEL env var)"
 
+    @property
+    def current_model_id(self) -> str:
+        """The model id in use. Single accessor so bots never guess an attr name."""
+        return self.model or ""
+
     def has_client(self, thread_id: str) -> bool:
         return thread_id in self._clients
 

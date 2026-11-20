@@ -327,7 +327,7 @@ async def main(backend: str = "claude", model: str | None = None):
     runner = await select_runner(backend, model)
     commands.use_runner(runner)
     REASONING_BACKEND = backend or "claude"
-    REASONING_MODEL = model or getattr(runner, "model", "") or ""
+    REASONING_MODEL = model or runner.current_model_id or ""
     _register_handlers(platform)
 
     print(f"[startup] Backend: {backend}")

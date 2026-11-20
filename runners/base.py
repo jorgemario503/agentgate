@@ -161,6 +161,15 @@ class Runner(Protocol):
         """Return True if a live client exists for this thread."""
         ...
 
+    @property
+    def current_model_id(self) -> str:
+        """The model id in use, or "" when the backend picks it (Claude).
+
+        One accessor so a bot reports the same model the runner actually sends
+        to the provider — and so /reasoning resolves against the right id.
+        """
+        ...
+
     def init_agentdb(self, db, platform: PlatformConfig) -> None:
         """Initialize AgentDB governed memory. No-op when AGENTDB_ENABLED=false."""
         ...

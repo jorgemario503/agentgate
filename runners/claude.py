@@ -169,6 +169,11 @@ class ClaudeRunner:
     # Runner protocol
     # ------------------------------------------------------------------
 
+    @property
+    def current_model_id(self) -> str:
+        """The Claude SDK owns model selection; there is no id to report."""
+        return ""
+
     def has_client(self, thread_id: str) -> bool:
         return thread_id in self._clients
 
