@@ -92,3 +92,15 @@ This is the **offline, deterministic** half only. It does **not** measure provid
 cached_tokens)` — same report object, no code change. Default-on still requires
 that live measurement; the offline result only proves we do not *regress* the
 cacheable prefix.
+
+## Live task-correctness (opt-in)
+
+Run: `AGENTGATE_LIVE_TESTS=1 python -c "from core.live_task_check import run_task_correctness as r; print(r())"`
+
+Against `deepseek-ai/DeepSeek-V4.1-Flash-1017` (the runner's model, via the same DEEPINFRA_* env vars), one guarded call (~332 tokens of a 6,000 budget) produced:
+
+- `answer_from_compressed.correct = true` — the model quoted the FATAL fact (`migration aborted, missing table 'invoices_2024'`) from the compressed tool message, so compression preserved the needed diagnostic.
+- `retrieval_exact.exact_match = true` — the original is recoverable byte-for-byte via the handle.
+- Budget respected: used well under the cap; the run refuses any call whose worst case would exceed the remaining budget.
+
+This validates correctness on one case, not a full task suite. The provider reports `cached_tokens` and cost per call, which the H13 stage-2 live run can record via `record_provider_usage`.
