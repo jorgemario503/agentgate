@@ -74,3 +74,21 @@ python -m pytest tests/test_benchmark.py -q
 - Before any default-on: measure prefix-cache hit rate (H13) and task
   correctness on real sessions. Do **not** claim whole-session savings from
   these synthetic numbers.
+
+## Prefix-cache stability (H13, offline stage)
+
+Run: `python -c "from core.cache_stability import run_h13; print(run_h13()['all_prefixes_stable'])"`
+
+The provider prefix cache matches the serialized request from the start. Because
+every transform happens **once, at ingestion** (a new tool message is built; an
+already-sent message is never rewritten), the leading messages are byte-identical
+turn-over-turn for **all** variants — baseline (A), C1 (B), and C1+C2 (C). The
+offline harness (`core/cache_stability.py`) confirms the reusable-prefix fraction
+is **1.0** across turns for each variant, including dedup (which only shortens the
+*new* duplicate message, never history).
+
+This is the **offline, deterministic** half only. It does **not** measure provider
+`cached_tokens`. A live run attaches real numbers via `record_provider_usage(report,
+cached_tokens)` — same report object, no code change. Default-on still requires
+that live measurement; the offline result only proves we do not *regress* the
+cacheable prefix.
