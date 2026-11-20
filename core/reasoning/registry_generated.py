@@ -1,0 +1,93 @@
+"""GENERATED — do not edit by hand.
+
+Produced by scripts/refresh_reasoning_registry.py on 2026-11-20T15:39:19Z
+from https://api.deepinfra.com/v1/openai/models
+
+Regenerate with:
+    python scripts/refresh_reasoning_registry.py --apply
+"""
+from __future__ import annotations
+
+from core.reasoning.registry import ModelReasoning
+
+#: (fnmatch pattern, ModelReasoning) for models whose reasoning support
+#: is published in the provider catalog. Layered *under* the hand-written
+#: patterns in registry.py, so an explicit human entry still wins.
+DEEPINFRA_GENERATED: list[tuple[str, ModelReasoning]] = [
+    ("ByteDance/Seed-1.8", ModelReasoning("model_variant")),
+    ("ByteDance/Seed-2.0-code", ModelReasoning("model_variant")),
+    ("ByteDance/Seed-2.0-mini", ModelReasoning("model_variant")),
+    ("ByteDance/Seed-2.0-pro", ModelReasoning("model_variant")),
+    ("MiniMaxAI/MiniMax-M3", ModelReasoning("model_variant")),
+    ("Qwen/Qwen3-14B", ModelReasoning("reasoning_effort")),
+    ("Qwen/Qwen3-235B-A22B-Instruct-2507", ModelReasoning("reasoning_effort")),
+    ("Qwen/Qwen3-30B-A3B", ModelReasoning("reasoning_effort")),
+    ("Qwen/Qwen3-32B", ModelReasoning("reasoning_effort")),
+    ("Qwen/Qwen3-Next-80B-A3B-Instruct", ModelReasoning("reasoning_effort")),
+    ("Qwen/Qwen3-VL-235B-A22B-Instruct", ModelReasoning("reasoning_effort")),
+    ("Qwen/Qwen3-VL-30B-A3B-Instruct", ModelReasoning("reasoning_effort")),
+    ("Qwen/Qwen3.5-27B", ModelReasoning("reasoning_effort")),
+    ("Qwen/Qwen3.5-35B-A3B", ModelReasoning("reasoning_effort")),
+    ("Qwen/Qwen3.5-397B-A17B", ModelReasoning("reasoning_effort")),
+    ("Qwen/Qwen3.5-9B", ModelReasoning("reasoning_effort")),
+    ("Qwen/Qwen3.6-27B", ModelReasoning("reasoning_effort")),
+    ("Qwen/Qwen3.6-35B-A3B", ModelReasoning("reasoning_effort")),
+    ("Qwen/Qwen3.7-Max", ModelReasoning("reasoning_effort")),
+    ("Qwen/Qwen3.8-27B", ModelReasoning("reasoning_effort")),
+    ("Qwen/Qwen3.8-Flash", ModelReasoning("reasoning_effort")),
+    ("Qwen/Qwen3.8-Max", ModelReasoning("reasoning_effort")),
+    ("Qwen/Qwen4-Max", ModelReasoning("model_variant")),
+    ("RadixArk/DaisyRose-27B", ModelReasoning("model_variant")),
+    ("XiaomiMiMo/MiMo-V2.6-Flash", ModelReasoning("model_variant")),
+    ("XiaomiMiMo/MiMo-V2.6-Pro", ModelReasoning("model_variant")),
+    ("anthropic/claude-fable-5", ModelReasoning("reasoning_effort")),
+    ("anthropic/claude-haiku-4-5", ModelReasoning("reasoning_effort")),
+    ("anthropic/claude-opus-4-7", ModelReasoning("reasoning_effort")),
+    ("anthropic/claude-opus-4-8", ModelReasoning("reasoning_effort")),
+    ("anthropic/claude-opus-5", ModelReasoning("reasoning_effort")),
+    ("anthropic/claude-opus-5-5", ModelReasoning("reasoning_effort")),
+    ("anthropic/claude-sonnet-4-6", ModelReasoning("reasoning_effort")),
+    ("anthropic/claude-sonnet-5", ModelReasoning("reasoning_effort")),
+    ("anthropic/claude-sonnet-5-5", ModelReasoning("reasoning_effort")),
+    ("deepseek-ai/DeepSeek-R1-0528", ModelReasoning("model_variant")),
+    ("deepseek-ai/DeepSeek-V3.1", ModelReasoning("reasoning_effort")),
+    ("deepseek-ai/DeepSeek-V4-Flash", ModelReasoning("model_variant")),
+    ("deepseek-ai/DeepSeek-V4-Flash-0731", ModelReasoning("model_variant")),
+    ("deepseek-ai/DeepSeek-V4-Flash-Vision-Exp", ModelReasoning("model_variant")),
+    ("deepseek-ai/DeepSeek-V4-Pro", ModelReasoning("model_variant")),
+    ("deepseek-ai/DeepSeek-V4-Pro-0813", ModelReasoning("model_variant")),
+    ("deepseek-ai/DeepSeek-V4.1-Flash", ModelReasoning("model_variant")),
+    ("deepseek-ai/DeepSeek-V4.1-Flash-1017", ModelReasoning("model_variant")),
+    ("google/gemini-2.5-flash", ModelReasoning("reasoning_effort")),
+    ("google/gemini-2.5-pro", ModelReasoning("reasoning_effort")),
+    ("google/gemini-3.1-flash-lite", ModelReasoning("reasoning_effort")),
+    ("google/gemini-3.1-pro", ModelReasoning("reasoning_effort")),
+    ("google/gemini-3.5-flash", ModelReasoning("reasoning_effort")),
+    ("google/gemini-3.7-flash", ModelReasoning("reasoning_effort")),
+    ("google/gemma-4-26B-A4B-it", ModelReasoning("model_variant")),
+    ("google/gemma-4-31B-it", ModelReasoning("model_variant")),
+    ("google/gemma-4-31B-it-Ultra", ModelReasoning("model_variant")),
+    ("google/gemma-4-31B-it-turbo", ModelReasoning("model_variant")),
+    ("ibm-granite/granite-4.2-8b", ModelReasoning("model_variant")),
+    ("inclusionAI/Ling-3.0-flash", ModelReasoning("model_variant")),
+    ("inclusionAI/Ling-3.0-flash-VL", ModelReasoning("model_variant")),
+    ("meta-models/Muse-Glimmer-30B", ModelReasoning("model_variant")),
+    ("moonshotai/Kimi-K2.6", ModelReasoning("model_variant")),
+    ("moonshotai/Kimi-K3", ModelReasoning("model_variant")),
+    ("moonshotai/Kimi-K3.1-Pro", ModelReasoning("model_variant")),
+    ("nvidia/NVIDIA-Nemotron-3-Super-120B-A12B", ModelReasoning("model_variant")),
+    ("nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B", ModelReasoning("model_variant")),
+    ("nvidia/NVIDIA-Nemotron-3.5-Lightning", ModelReasoning("model_variant")),
+    ("nvidia/NVIDIA-Nemotron-3.5-Super-VL", ModelReasoning("model_variant")),
+    ("openai/gpt-oss-120b", ModelReasoning("reasoning_effort")),
+    ("openai/gpt-oss-120b-Ultra", ModelReasoning("reasoning_effort")),
+    ("openai/gpt-oss-20b", ModelReasoning("reasoning_effort")),
+    ("tencent/Hy4-preview", ModelReasoning("model_variant")),
+    ("thinkingmachines/Inkling-2-Small", ModelReasoning("model_variant")),
+    ("thinkingmachines/Inkling-Small", ModelReasoning("model_variant")),
+    ("zai-org/GLM-4.6", ModelReasoning("model_variant")),
+    ("zai-org/GLM-4.7", ModelReasoning("model_variant")),
+    ("zai-org/GLM-5.2", ModelReasoning("model_variant")),
+    ("zai-org/GLM-5.3", ModelReasoning("model_variant")),
+    ("zai-org/GLM-5.3-Flash", ModelReasoning("model_variant")),
+]

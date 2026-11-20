@@ -390,7 +390,7 @@ async def main(backend: str = "claude", model: str | None = None, bot_name: str 
 
     global REASONING_BACKEND, REASONING_MODEL
     REASONING_BACKEND = backend or "claude"
-    REASONING_MODEL = model or getattr(runner, "model", "") or ""
+    REASONING_MODEL = model or runner.current_model_id or ""
 
     print(f"[startup] Backend: {backend}")
     if bot_name:

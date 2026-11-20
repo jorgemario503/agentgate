@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 ReasoningLevel = Literal["off", "low", "medium", "high"]
-ReasoningState = Literal["unknown", "verified", "unverified", "rejected"]
+ReasoningState = Literal["unknown", "verified", "unverified", "rejected", "failed"]
 
 REASONING_LEVELS: tuple[str, ...] = ("off", "low", "medium", "high")
 
@@ -58,6 +58,10 @@ REGISTRY: dict[str, list[tuple[str, ModelReasoning]]] = {
         ("deepseek-r1*", ModelReasoning("reasoning_effort", notes="DeepSeek R1 reasoning model")),
         ("deepseek-ai/DeepSeek-R1*", ModelReasoning("reasoning_effort")),
         ("*r1*", ModelReasoning("reasoning_effort")),
+        # DeepSeek V3/V4 are covered by the generated fragment (registry_generated.py),
+        # which records the catalog's own tags: V3.1 carries reasoning_effort, V4.x
+        # carries reasoning only. Kept out of the hand list so the catalog stays the
+        # single source of truth for these (docs/reasoning-registry-source-of-truth.md).
         # gpt-oss supports reasoning_effort low|medium|high.
         ("*gpt-oss*", ModelReasoning("reasoning_effort")),
         ("*kimi-k2*thinking*", ModelReasoning("reasoning_effort")),
@@ -66,11 +70,31 @@ REGISTRY: dict[str, list[tuple[str, ModelReasoning]]] = {
         ("*thinking*", ModelReasoning("model_variant")),
     ],
     "fireworks": [
+        # Fireworks has no machine-readable reasoning tag in /models (unlike
+        # DeepInfra), so these are matched by family name. Every Fireworks *chat*
+        # model we probed accepts the top-level reasoning_effort parameter
+        # ("low"|"medium"|"high") and returns reasoning_content, per
+        # https://fireworks.ai/docs/guides/reasoning -- see
+        # docs/reasoning-registry-source-of-truth.md.
+        # A non-reasoning model (e.g. an embedding model) rejects it with
+        # "non-reasoning model does not support reasoning_effort", which
+        # looks_like_rejection() recognises, so it disables cleanly.
         ("*deepseek-r1*", ModelReasoning("reasoning_effort")),
         ("*r1*", ModelReasoning("reasoning_effort")),
         ("*gpt-oss*", ModelReasoning("reasoning_effort")),
         ("*kimi-k2*thinking*", ModelReasoning("reasoning_effort")),
         ("*thinking*", ModelReasoning("reasoning_effort")),
+        # Reasoning families confirmed by probe against the live catalog.
+        ("*deepseek-v4*", ModelReasoning("reasoning_effort")),
+        ("*deepseek-v3*", ModelReasoning("reasoning_effort")),
+        ("*kimi-k3*", ModelReasoning("reasoning_effort")),
+        ("*glm-5*", ModelReasoning("reasoning_effort")),
+        ("*qwen3p8*", ModelReasoning("reasoning_effort")),
+        ("*minimax-*", ModelReasoning("reasoning_effort")),
+        ("*nemotron-*", ModelReasoning("reasoning_effort")),
+        ("*ember-*", ModelReasoning("reasoning_effort")),
+        # Standalone reasoning models with no family prefix.
+        ("*/inkling", ModelReasoning("reasoning_effort")),
     ],
     "local": [
         # Ollama / vLLM / llama.cpp expose reasoning_effort when supported.
@@ -80,6 +104,25 @@ REGISTRY: dict[str, list[tuple[str, ModelReasoning]]] = {
         ("*thinking*", ModelReasoning("reasoning_effort")),
     ],
 }
+
+
+def _with_generated(provider: str, entries: list[tuple[str, ModelReasoning]]) -> list[tuple[str, ModelReasoning]]:
+    """Append the machine-generated patterns for `provider` after the hand-written ones.
+
+    Generated entries are exact model ids (see scripts/refresh_reasoning_registry.py),
+    so they are the most specific possible match and never shadow a hand-written
+    wildcard that a human deliberately placed first. A missing generated module
+    is not an error: the hand-written patterns still work.
+    """
+    try:
+        from core.reasoning import registry_generated as _gen
+    except Exception:
+        return entries
+    generated = getattr(_gen, f"{provider.upper()}_GENERATED", [])
+    return entries + list(generated)
+
+
+REGISTRY["deepinfra"] = _with_generated("deepinfra", REGISTRY["deepinfra"])
 
 
 def lookup(provider: str, model_id: str) -> ModelReasoning | None:

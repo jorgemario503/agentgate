@@ -898,6 +898,11 @@ class DeepInfraRunner:
         self._model = resolve_model(value)
         return self._model
 
+    @property
+    def current_model_id(self) -> str:
+        """The model id in use. Single accessor so bots never guess an attr name."""
+        return self._model.model_id
+
     def has_client(self, thread_id: str) -> bool:
         return thread_id in self._clients
 
