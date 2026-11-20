@@ -131,3 +131,8 @@ python -m pytest tests/test_artifacts.py tests/test_tool_compression.py \
 Covers: disabled == identity, log/JSON/dense/traceback transforms, fail-open,
 store-unavailable refusal, retrieval round-trip, cross-session isolation,
 path/symlink security, metadata + prefix stability.
+
+## Benchmark
+
+Offline replay harness and results: see [context-efficiency-benchmark.md](context-efficiency-benchmark.md).
+Run it with `python -m core.benchmark`.
