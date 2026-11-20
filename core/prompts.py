@@ -371,14 +371,23 @@ def build_system_prompt(
     workspace_path: str = "",
     agentdb_middleware: Any = None,
     session_id: Optional[str] = None,
+    skills_manifest: str = "",
 ) -> str:
     """Assemble the prompt in stable-to-volatile order.
 
-    The resume block is included only for states that resume; AgentDB memory is
-    included only when it yields something. Each section is dropped on failure
-    without affecting the others.
+    The skills manifest (when skills are enabled) is placed right after the
+    stable base/hard-rules section so it stays inside the cached prefix and is
+    byte-identical across warm turns. The resume block is included only for
+    states that resume; AgentDB memory is included only when it yields
+    something. Each section is dropped on failure without affecting the others.
+
+    ``skills_manifest`` defaults to "" so disabled mode is byte-for-byte
+    identical to the pre-skills prompt.
     """
     sections = [build_base_prompt()]
+
+    if skills_manifest:
+        sections.append(skills_manifest)
 
     if state.resumes and history_path:
         try:

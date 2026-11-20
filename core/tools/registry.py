@@ -165,11 +165,18 @@ def build_tools(
     output_cap: int,
     bash_timeout: int,
     pipeline=None,
+    skills_catalog=None,
 ) -> dict[str, Tool]:
-    """Build the shared 8-tool registry (plus tool_result_read when compressing).
+    """Build the shared 8-tool registry (plus conditionals).
 
     ``output_cap`` and ``bash_timeout`` come from the provider settings, so each
     runner passes its own values; the registry itself holds no module globals.
+
+    ``skills_catalog`` (a ``core.skills.Catalog``) adds the ``skill_read`` and
+    ``skill_list`` tools when the skills feature is enabled and the catalog is
+    non-empty. When ``None`` (the default) the registry is byte-for-byte the
+    same as before skills existed — no extra schema, so disabled mode is
+    unchanged.
     """
     def t(name, desc, params, required, handler):
         return Tool(schema=_tool_schema(name, desc, params, required), handler=handler)
@@ -226,5 +233,30 @@ def build_tools(
              "offset": {"type": "integer"},
              "limit": {"type": "integer"}},
             ["artifact_id"], tool_result_read_handler(pipeline),
+        )
+    if skills_catalog is not None and skills_catalog.entries:
+        from core.skills import read_skill_body, list_line, SkillReadError
+
+        def _skill_read(args: dict) -> str:
+            name = args.get("name", "")
+            try:
+                return read_skill_body(skills_catalog, name)
+            except SkillReadError as e:
+                return f"ERROR: {e}"
+
+        def _skill_list(args: dict) -> str:
+            return list_line(skills_catalog)
+
+        tools["skill_read"] = t(
+            "skill_read",
+            "Load the full instructions of an available skill by name. Call this "
+            "only when a skill is relevant to the current task.",
+            {"name": {"type": "string"}}, ["name"], _skill_read,
+        )
+        tools["skill_list"] = t(
+            "skill_list",
+            "List every available skill (name + description), including any not "
+            "shown in the prompt.",
+            {}, [], _skill_list,
         )
     return tools
