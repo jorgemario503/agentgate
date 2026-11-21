@@ -32,3 +32,6 @@ venv/
 # Editors
 .vscode/
 .idea/
+
+# Local DB recovery backups (not source)
+_archive/agentdb-legacy/
