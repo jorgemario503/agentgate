@@ -71,22 +71,24 @@ def init_agentdb_for(runner: Any, platform: Any, *, config: Any) -> None:
 
 
 def build_consolidation_llm_fn(provider: str) -> Any:
-    """Build a sync ``llm_fn`` for AgentDB consolidation synthesis, or None.
+    """Resolve AgentGate config and hand it to agentdb's ``build_llm_fn``.
 
-    Returns None (consolidation stays copy-only / inert) unless ALL of:
+    AgentGate owns only its own configuration here: the on/off flag and the
+    consolidation model/params (resolved from ``core.providers``). All the
+    client construction and ``llm_fn`` wrapping lives in the agentdb package
+    (``agentdb.providers.consolidation.build_llm_fn``) — AgentGate does not
+    import ``openai`` or wrap any callable itself.
+
+    Returns ``None`` (consolidation stays copy-only / inert) unless ALL of:
     * ``AGENTDB_CONSOLIDATION_ENABLED`` is on,
     * a consolidation model is configured for the provider
       (``{PREFIX}_CONSOLIDATION_MODEL`` or a global ``CONSOLIDATION_MODEL``), and
-    * the agentdb package exposes ``make_llm_fn`` (structural helper).
+    * the installed agentdb exposes ``build_llm_fn`` (import succeeds).
 
-    The actual client-to-``llm_fn`` wrapping lives in the **agentdb package**
-    (``agentdb.providers.consolidation.make_llm_fn``); AgentGate only resolves
-    its own config + constructs the client. Until the installed agentdb ships
-    that helper, this returns None (feature dormant), which is safe: the runner
-    then passes run_consolidation=False and behavior is unchanged.
-
-    Never raises at build time; only the actual model call can error, and that
-    is handled by the package (it falls back to the top source value).
+    Until a released ``agentdatabase`` ships ``build_llm_fn``, this returns
+    ``None`` (feature dormant); the runner then passes ``run_consolidation=False``
+    and behavior is unchanged. Never raises at build time; the package handles
+    model-call errors and falls back to the top source value.
     """
     try:
         import core.config as _cfg
@@ -101,19 +103,13 @@ def build_consolidation_llm_fn(provider: str) -> Any:
         if not model:
             return None
 
-        # The provider-agnostic wrapper belongs to agentdb. Import lazily so an
-        # older install (no helper) simply leaves consolidation dormant.
-        from agentdb.providers.consolidation import make_llm_fn
+        # The high-level helper (client construction + wrapping) lives in agentdb.
+        from agentdb.providers.consolidation import build_llm_fn
 
-        from openai import OpenAI  # sync client — llm_fn is a plain callable
-
-        client = OpenAI(
-            api_key=settings.api_key or "not-needed",
-            base_url=settings.base_url or "https://api.deepinfra.com/v1/openai",
-        )
-        return make_llm_fn(
-            client,
-            model,
+        return build_llm_fn(
+            model=model,
+            base_url=settings.base_url,
+            api_key=settings.api_key or None,
             max_tokens=settings.consolidation_max_tokens,
             temperature=settings.consolidation_temperature,
         )

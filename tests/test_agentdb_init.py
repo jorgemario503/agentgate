@@ -125,8 +125,8 @@ class TestBuildConsolidationLlmFn(unittest.TestCase):
 
     def test_enabled_with_model_returns_callable(self):
         # With enabled + a model, the result is a callable ONLY if the agentdb
-        # package ships make_llm_fn (the wrapper now lives in agentdb). Until it
-        # does, the feature is dormant -> None.
+        # package ships build_llm_fn (the high-level helper lives in agentdb).
+        # Until a release includes it, the feature is dormant -> None.
         try:
             import agentdb.providers.consolidation  # noqa: F401
             helper_present = True
