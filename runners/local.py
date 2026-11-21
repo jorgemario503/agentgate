@@ -52,6 +52,7 @@ from core.skills import (
     build_skills_context, SkillSession,
     is_skill_read_tool, record_activation_from_result,
     recommend, build_recommendation_nudge,
+    restoration_message, resolve_invocation,
 )
 from runners.base import (
     PlatformConfig, TaskInterrupted, check_blocked,
@@ -328,15 +329,23 @@ class LocalAgentClient:
         self._skills_context = skills_context
         self._skill_session = skill_session
         self._skill_turn = 0
+        self._explicit_skill_message = None
 
     async def connect(self) -> None:
         self.messages = apply_system_prompt(
             self.session_store.load(self.session_id), self.system_prompt
         )
 
-    async def query(self, prompt: str, ephemeral_context: Optional[str] = None) -> None:
+    async def query(self, prompt: str, ephemeral_context: Optional[str] = None,
+                    explicit_skill_message: Optional[dict] = None) -> None:
         self.messages.append({"role": "user", "content": prompt})
         self._ephemeral_context = ephemeral_context
+        # Explicit //skill activation: append the lower-trust skill body right
+        # after the task so normal lifecycle rules (no-repeat) apply, WITHOUT
+        # using a system role (spec §5 — preserve lower-trust origin).
+        self._explicit_skill_message = explicit_skill_message
+        if explicit_skill_message is not None:
+            self.messages.append(explicit_skill_message)
         self._skill_turn += 1
 
     def _trim_history(self) -> None:
@@ -380,29 +389,37 @@ class LocalAgentClient:
         recs = recommend(self._skills_context.catalog, user_request=user_request)
         return build_recommendation_nudge(recs)
 
-    def _skill_reactivation_context(self) -> str:
-        """One-time restore of an active skill whose body was trimmed/compacted.
+    def _skill_reactivation_messages(self) -> list[dict]:
+        """At most one lower-trust restore message for a trimmed active skill.
 
-        Computed from the actual trimmed message list (not activation state
-        alone), injected as volatile context before the latest user turn so the
-        stable prefix, and the prompt cache, are untouched.
+        Only produced within the same task the skill was activated in. The body
+        is delivered as a USER-role, labeled message (spec §5), never as system.
         """
         if self._skill_session is None or self._skills_context is None:
-            return ""
-        return self._skill_session.reactivation_block(
+            return []
+        blocks = self._skill_session.reactivation_block(
             self.messages, self._skills_context.catalog, self._skill_turn
         )
+        if not blocks:
+            return []
+        name = self._skill_session.last_reactivated_name or "skill"
+        return [restoration_message(name, blocks)]
 
     def _build_outgoing_messages(self) -> list[dict]:
-        volatile = [c for c in (self._ephemeral_context, self._skill_reactivation_context()) if c]
-        if not volatile:
-            return self.messages
         messages = list(self.messages)
-        for i in range(len(messages) - 1, -1, -1):
-            if messages[i].get("role") == "user":
-                for c in reversed(volatile):
-                    messages.insert(i, {"role": "system", "content": c})
-                break
+        # Lower-trust skill restore messages (USER role), inserted just before
+        # the latest user turn so the stable prefix is untouched.
+        skill_msgs = self._skill_reactivation_messages()
+        if skill_msgs or self._ephemeral_context:
+            for i in range(len(messages) - 1, -1, -1):
+                if messages[i].get("role") == "user":
+                    # Insert restore messages (user) then ephemeral (system) so
+                    # ephemeral stays the nearest preceding context as before.
+                    for m in reversed(skill_msgs):
+                        messages.insert(i, m)
+                    if self._ephemeral_context:
+                        messages.insert(i, {"role": "system", "content": self._ephemeral_context})
+                    break
         return messages
 
     async def _summarize(self, summarizer_messages: list[dict], max_tok: int) -> str:
@@ -1038,6 +1055,17 @@ class LocalRunner:
                     thread_id, workspace_path, post_fn, platform,
                 )
 
+                # Mode C: //skill-name invocation (shared parsing/activation).
+                # Resolved before memory/nudge so the task text and explicit
+                # skill message are final for this turn.
+                invocation = resolve_invocation(
+                    prompt, client._skills_context, client._skill_session,
+                    client._skill_turn + 1,
+                )
+                if invocation.error_reply is not None:
+                    return invocation.error_reply, client.session_id
+                prompt = invocation.task
+
                 memory_context = None
                 if self._agentdb_middleware is not None:
                     messages, _ = await self._agentdb_middleware.prepare_turn_async(
@@ -1065,7 +1093,10 @@ class LocalRunner:
                 _skill_nudge = client.skills_recommendation(prompt)
                 if _skill_nudge:
                     memory_context = ((memory_context + "\n\n") if memory_context else "") + _skill_nudge
-                await client.query(prompt, ephemeral_context=memory_context)
+                await client.query(
+                    prompt, ephemeral_context=memory_context,
+                    explicit_skill_message=invocation.explicit_message,
+                )
 
                 text_parts: list[str] = []
                 async for message in client.receive_response():

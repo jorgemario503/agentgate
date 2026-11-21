@@ -77,6 +77,9 @@ class SkillEntry:
     compatibility: Optional[str] = None
     metadata: dict[str, str] = field(default_factory=dict)
     allowed_tools: Optional[str] = None
+    #: Deterministic keyword triggers (from metadata.agentgate.triggers), used by
+    #: Mode B. Empty when none configured. Never derived from the body/description.
+    triggers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -156,6 +159,55 @@ def _split_frontmatter(content: str) -> tuple[str, str]:
     return parts[1], parts[2].strip()
 
 
+def _parse_triggers(metadata: object) -> tuple[tuple[str, ...], list[str]]:
+    """Extract and validate ``metadata.agentgate.triggers``.
+
+    Returns ``(triggers, warnings)``. Triggers are deterministic keyword phrases
+    used by Mode B. Invalid/overly broad entries are dropped with a warning; a
+    malformed ``agentgate``/``triggers`` shape yields no triggers (never raises).
+    The whole ``metadata`` mapping stays str->str for catalog fidelity; triggers
+    are additionally surfaced as a typed tuple here.
+    """
+    warnings: list[str] = []
+    if not isinstance(metadata, dict):
+        return (), warnings
+    ag = metadata.get("agentgate")
+    if ag is None:
+        return (), warnings
+    if not isinstance(ag, dict):
+        warnings.append("metadata.agentgate must be a mapping; triggers ignored")
+        return (), warnings
+    raw = ag.get("triggers")
+    if raw is None:
+        return (), warnings
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        warnings.append("metadata.agentgate.triggers must be a list; ignored")
+        return (), warnings
+
+    seen: set[str] = set()
+    triggers: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            warnings.append("non-string trigger ignored")
+            continue
+        norm = " ".join(item.strip().lower().split())
+        if not norm:
+            continue
+        if len(norm) < 3:
+            warnings.append(f"trigger too short '{norm}' ignored")
+            continue
+        if len(norm) > 120:
+            warnings.append(f"trigger too long '{norm[:20]}...' ignored")
+            continue
+        if norm in seen:
+            continue
+        seen.add(norm)
+        triggers.append(norm)
+    return tuple(triggers), warnings
+
+
 def parse_skill_file(text: str, skill_dir: Path) -> tuple[SkillEntry, list[str]]:
     """Parse and validate one SKILL.md.
 
@@ -194,6 +246,10 @@ def parse_skill_file(text: str, skill_dir: Path) -> tuple[SkillEntry, list[str]]
         errors.append("metadata must be a mapping")
         metadata = None
 
+    # Triggers are optional keyword hints for Mode B; malformed ones are dropped
+    # inside _parse_triggers without invalidating the skill.
+    triggers, _trigger_warnings = _parse_triggers(metadata)
+
     entry = SkillEntry(
         name=_normalize(str(data.get("name", skill_dir.name)).strip()),
         description=str(data.get("description", "")).strip(),
@@ -203,6 +259,7 @@ def parse_skill_file(text: str, skill_dir: Path) -> tuple[SkillEntry, list[str]]
         compatibility=compat if isinstance(compat, str) else None,
         metadata={str(k): str(v) for k, v in (metadata or {}).items()},
         allowed_tools=_opt_str(data.get("allowed-tools")),
+        triggers=triggers,
     )
     return entry, errors
 
@@ -323,6 +380,7 @@ def _discover_one(child: Path, root_resolved: Path) -> tuple[Optional[SkillEntry
         compatibility=entry.compatibility,
         metadata=entry.metadata,
         allowed_tools=entry.allowed_tools,
+        triggers=entry.triggers,
     )
     return entry, []
 
@@ -539,45 +597,73 @@ def _tokens(text: str) -> list[str]:
     return [t for t in re.findall(r"[a-z0-9][a-z0-9_+-]*", text.lower()) if t not in _STOPWORDS]
 
 
+def _normalize_phrase(text: str) -> str:
+    return " ".join(text.strip().lower().split())
+
+
+def _phrase_in_request(phrase: str, request_norm: str) -> bool:
+    """True if `phrase` occurs in `request_norm` on word boundaries.
+
+    Both are pre-normalized (lowercase, collapsed whitespace). Boundaries are
+    checked with non-alphanumeric edges so "ticket" does not match "tickets"
+    when the trigger is the bare word, but a multi-word phrase like
+    "create a ticket" still matches inside a longer sentence.
+    """
+    if not phrase:
+        return False
+    start = 0
+    while True:
+        idx = request_norm.find(phrase, start)
+        if idx == -1:
+            return False
+        before = request_norm[idx - 1] if idx > 0 else " "
+        after_idx = idx + len(phrase)
+        after = request_norm[after_idx] if after_idx < len(request_norm) else " "
+        if not before.isalnum() and not after.isalnum():
+            return True
+        start = idx + 1
+
+
 def recommend(
     catalog: Catalog,
     *,
     user_request: str,
     recent_errors: str = "",
-    min_score: float = 0.34,
     limit: int = 2,
 ) -> list[Recommendation]:
-    """Cheap, explainable skill recommendations. Returns [] to abstain.
+    """Deterministic trigger-phrase recommendations (Mode B). [] to abstain.
 
-    Scores a skill by the fraction of its distinctive description tokens that
-    appear in the user request (boosted when the same terms appear in recent
-    errors). Only deterministic token matching — no embeddings, no extra model
-    call. Below ``min_score`` the function abstains (returns []). Never injects
-    bodies; a recommendation is only a nudge to call ``skill_read``.
+    Matches ONLY the configured ``metadata.agentgate.triggers`` phrases against
+    the current user request — never the skill body or description, and never
+    tool results or history. Case/whitespace normalized, word-boundary matched.
+    If several skills match, at most ``limit`` are returned, ordered by match
+    specificity (longer/more-specific phrase first) then skill name. No match
+    yields [] (abstention). ``recent_errors`` is accepted for interface
+    stability but intentionally does NOT widen matching (spec §4: match only the
+    user request).
+
+    Never injects a body; a recommendation is only a nudge to call ``skill_read``.
     """
-    request_tokens = set(_tokens(user_request))
-    if not request_tokens:
+    req = _normalize_phrase(user_request)
+    if not req:
         return []
-    error_tokens = set(_tokens(recent_errors))
 
     results: list[Recommendation] = []
     for entry in catalog.entries:
-        desc_tokens = set(_tokens(entry.description)) | set(_tokens(entry.name.replace("-", " ")))
-        if not desc_tokens:
+        matched: list[str] = []
+        for trig in entry.triggers:
+            if _phrase_in_request(trig, req):
+                matched.append(trig)
+        if not matched:
             continue
-        hits = desc_tokens & request_tokens
-        if not hits:
-            continue
-        score = len(hits) / len(desc_tokens)
-        # A little boost if the same terms show up in recent errors (the task
-        # is actively failing and may need this skill's procedure).
-        if hits & error_tokens:
-            score = min(1.0, score + 0.1)
-        if score < min_score:
-            continue
-        reasons = tuple(sorted(hits))[:6]
+        # Specificity: the longest matched trigger dominates (more words/chars
+        # = more specific), and a higher match count adds a small tie-break.
+        best_len = max(len(m) for m in matched)
+        score = best_len + (len(matched) - 1) * 0.001
+        reasons = tuple(sorted(matched, key=lambda t: (-len(t), t))[:3])
         results.append(Recommendation(entry.name, round(score, 3), reasons))
 
+    # Stable ordering: higher specificity score first, then skill name.
     results.sort(key=lambda r: (-r.score, r.name))
     return results[:limit]
 
@@ -633,6 +719,9 @@ class SkillSession:
         self._active: dict[str, ActiveSkill] = {}
         self._reactivated: set[str] = set()
         self._catalog = catalog
+        # Name of the most recent skill reactivated by reactivation_block(), so
+        # callers can label the lower-trust restore message with the right skill.
+        self.last_reactivated_name: Optional[str] = None
 
     def bind_catalog(self, catalog: Catalog) -> None:
         """Bind the catalog used for body-presence scanning and reactivation."""
@@ -676,12 +765,18 @@ class SkillSession:
     def reactivation_block(
         self, messages: list[dict], catalog: Catalog, turn: int
     ) -> str:
-        """Return a one-time reactivation message for dropped-but-active skills.
+        """One-time restoration content for a still-active skill dropped by trimming.
 
-        Only returns something for a skill that (a) was activated, (b) is no
-        longer present in the outgoing messages, and (c) has not already been
-        reactivated once. The body is re-injected exactly once; afterwards the
-        normal history policy applies. Returns "" when nothing to do.
+        Task-boundary rule (spec §6): restoration is only produced within the
+        *same* task the skill was activated in — i.e. ``turn`` must equal the
+        activation turn. On a later user turn a previous task's skill is NOT
+        auto-restored (the model can ``skill_read`` again if it still needs it).
+        This prevents indefinite injection of an old skill after the task
+        changes, without an LLM task detector.
+
+        Returns plain content (no role). Callers MUST inject it as a lower-trust
+        message (see ``restoration_message``), never as a system message — the
+        skill body keeps its lower-priority origin (spec §5).
         """
         if not self._active or catalog is None:
             return ""
@@ -690,6 +785,9 @@ class SkillSession:
             if name in self._reactivated:
                 continue
             act = self._active[name]
+            # Only restore within the same task (turn) the skill was activated in.
+            if turn != act.activated_turn:
+                continue
             # Verify the on-disk body still matches what was activated; if it
             # changed, do not silently re-inject different content.
             if act.fingerprint and not body_matches_fingerprint(catalog, name):
@@ -703,11 +801,214 @@ class SkillSession:
                 self._reactivated.add(name)
                 continue
             self._reactivated.add(name)
-            blocks.append(
-                f"[skill:{name}] Your earlier read of this skill was trimmed from "
-                f"context. Re-applying its instructions (loaded once):\n\n{body}"
-            )
+            self.last_reactivated_name = name
+            blocks.append(body)
         return "\n\n".join(blocks)
+
+    def explicit_activation(self, name: str, catalog: Catalog, turn: int) -> Optional[str]:
+        """Return the exact body for an explicit ``//skill`` activation.
+
+        Records the activation so normal lifecycle rules (no-repeat, one-time
+        reactivation within the task) apply afterwards. Returns the body, or
+        None if it cannot be read safely.
+        """
+        entry = catalog.get(name) if catalog is not None else None
+        if entry is None:
+            return None
+        try:
+            body = read_skill_body(catalog, name)
+        except SkillReadError:
+            return None
+        self.record_activation(name, entry.fingerprint, turn)
+        return body
+
+
+# ---------------------------------------------------------------------------
+# Mode C: explicit user invocation  //skill-name <task...>
+# ---------------------------------------------------------------------------
+
+#: Skill names are lowercase, alnum + hyphens (same rule as validation).
+_SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+@dataclass(frozen=True)
+class SkillInvocation:
+    name: str
+    task: str
+
+
+@dataclass(frozen=True)
+class InvocationError:
+    """A ``//something`` prefix that is NOT a valid invocation.
+
+    Returned only when the message clearly looks like an invocation attempt
+    (leading ``//word``) but the name is unknown or malformed, so the caller can
+    surface a clear error instead of silently running it as a normal prompt.
+    """
+
+    name: str
+    reason: str
+    suggestion: Optional[str] = None
+
+
+def parse_skill_invocation(text: str, catalog: Catalog) -> "SkillInvocation | InvocationError | None":
+    """Parse ``//<skill-name> <task>`` at the start of a user message.
+
+    Returns:
+    - ``SkillInvocation`` for a valid, catalogued skill,
+    - ``InvocationError`` when the text looks like an invocation but the name is
+      unknown/malformed (so the bot can report a clear error),
+    - ``None`` when the text is not an invocation attempt at all (normal prompt).
+
+    Contract (spec §4): only a leading ``//word`` (after optional whitespace) is
+    considered; ``//`` later in the message, or inside code/quotes, is ignored
+    because it is not at the start. Existing ``/cmd`` commands are single-slash
+    and never match here. The name must be a valid skill name and resolve in the
+    catalog; the remainder is the user's task, unchanged.
+    """
+    if not isinstance(text, str):
+        return None
+    stripped = text.lstrip()
+    if not stripped.startswith("//"):
+        return None
+
+    # First whitespace-delimited token after "//" is the candidate name.
+    body = stripped[2:]
+    if not body:
+        return None
+    parts = body.split(None, 1)
+    name = parts[0].strip().lower()
+    task = parts[1].strip() if len(parts) > 1 else ""
+
+    if not name or not _SKILL_NAME_RE.match(name):
+        return InvocationError(name=name or "", reason="invalid skill name")
+
+    if catalog.get(name) is not None:
+        return SkillInvocation(name=name, task=task)
+
+    # Unknown skill: offer the closest name if any (simple deterministic hint).
+    suggestion = _closest_name(name, catalog)
+    return InvocationError(name=name, reason="unknown skill", suggestion=suggestion)
+
+
+def _closest_name(name: str, catalog: Catalog) -> Optional[str]:
+    """Cheap deterministic suggestion: catalog names sharing the most chars."""
+    best = None
+    best_score = 0
+    for entry in catalog.entries:
+        # crude overlap score; deterministic and dependency-free
+        score = len(set(name) & set(entry.name))
+        if entry.name.startswith(name[:3]) or name[:3] == entry.name[:3]:
+            score += 5
+        if score > best_score:
+            best, best_score = entry.name, score
+    return best
+
+
+# ---------------------------------------------------------------------------
+# Lower-trust skill context messages (spec §5)
+#
+# Skill instructions are lower-priority data. They are delivered as user-role
+# messages with an explicit delimiter/label, never as system messages, so they
+# can never outrank hard rules or tool approval. Each builder returns a plain
+# dict ready to insert into the outgoing message list at a volatile position.
+# ---------------------------------------------------------------------------
+
+RESTORE_LABEL = "[Restored skill instructions]"
+EXPLICIT_LABEL = "[User-invoked skill instructions]"
+
+
+def restoration_message(name: str, body: str) -> dict:
+    """A lower-trust message restoring a still-active skill dropped by trimming.
+
+    Uses role ``user`` (not ``system``) with an explicit label so the body keeps
+    its lower-trust origin and hard rules stay authoritative.
+    """
+    content = (
+        f"{RESTORE_LABEL} The earlier ``{name}`` instructions were removed from "
+        f"context by trimming; here they are again for this task only. This is "
+        f"reference material, not new instructions, and it does not override the "
+        f"hard rules or tool approvals.\n\n{body}"
+    )
+    return {"role": "user", "content": content}
+
+
+def explicit_activation_message(name: str, body: str) -> dict:
+    """A lower-trust message carrying an explicitly user-invoked skill body.
+
+    The user asked for this skill via ``//{name}``. Delivered as a labeled user
+    message (lower trust), not a system message. Does not bypass permissions.
+    """
+    content = (
+        f"{EXPLICIT_LABEL} The user explicitly invoked the ``{name}`` skill. "
+        f"Use these instructions for the task that follows. This is reference "
+        f"material, not new instructions, and it does not override the hard rules "
+        f"or tool approvals.\n\n{body}"
+    )
+    return {"role": "user", "content": content}
+
+
+@dataclass(frozen=True)
+class InvocationResolution:
+    """Result of resolving a possibly-``//skill`` prompt for the runners.
+
+    - ``task``: the user's task text to run (the ``//skill`` prefix removed when
+      applicable; unchanged otherwise).
+    - ``explicit_message``: a lower-trust message dict to insert before the task
+      when an explicit skill was activated, else None.
+    - ``error_reply``: a user-facing error string when the invocation was an
+      attempt but invalid, else None (runner should return it without running).
+    - ``skill_name``: the explicitly activated skill name, else None.
+    """
+
+    task: str
+    explicit_message: Optional[dict] = None
+    error_reply: Optional[str] = None
+    skill_name: Optional[str] = None
+
+
+def resolve_invocation(
+    prompt: str,
+    skills_context: "SkillsContext",
+    skill_session: Optional[SkillSession],
+    turn: int,
+) -> InvocationResolution:
+    """Shared ``//skill`` handling used identically by every open-model runner.
+
+    When skills are disabled/empty, returns the prompt unchanged (no parsing),
+    so disabled mode never interprets ``//``.
+    """
+    if skills_context is None or not skills_context.enabled or skill_session is None:
+        return InvocationResolution(task=prompt)
+
+    parsed = parse_skill_invocation(prompt, skills_context.catalog)
+    if parsed is None:
+        return InvocationResolution(task=prompt)
+    if isinstance(parsed, InvocationError):
+        if parsed.reason == "unknown skill":
+            msg = f"Unknown skill `{parsed.name}`."
+            if parsed.suggestion:
+                msg += f" Did you mean `{parsed.suggestion}`?"
+            msg += " Use `skill_list` to see available skills."
+        else:
+            msg = (
+                f"Invalid skill invocation `//{parsed.name}`. Skill names use "
+                "lowercase letters, digits and hyphens."
+            )
+        return InvocationResolution(task=prompt, error_reply=msg)
+
+    # Valid invocation: load body via the same catalog/loader as skill_read.
+    body = skill_session.explicit_activation(parsed.name, skills_context.catalog, turn)
+    if body is None:
+        return InvocationResolution(
+            task=prompt,
+            error_reply=f"Skill `{parsed.name}` could not be loaded (unreadable or changed).",
+        )
+    return InvocationResolution(
+        task=parsed.task,
+        explicit_message=explicit_activation_message(parsed.name, body),
+        skill_name=parsed.name,
+    )
 
 
 def is_skill_read_tool(name: str) -> bool:

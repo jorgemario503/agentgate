@@ -47,6 +47,13 @@ from core.skills.catalog import (
     is_skill_read_tool,
     is_skill_tool,
     record_activation_from_result,
+    SkillInvocation,
+    InvocationError,
+    parse_skill_invocation,
+    restoration_message,
+    explicit_activation_message,
+    RESTORE_LABEL, EXPLICIT_LABEL,
+    InvocationResolution, resolve_invocation,
 )
 
 __all__ = [
@@ -61,4 +68,8 @@ __all__ = [
     "Recommendation", "recommend", "build_recommendation_nudge",
     "ActiveSkill", "SkillSession",
     "is_skill_read_tool", "is_skill_tool", "record_activation_from_result",
+    "SkillInvocation", "InvocationError", "parse_skill_invocation",
+    "restoration_message", "explicit_activation_message",
+    "RESTORE_LABEL", "EXPLICIT_LABEL",
+    "InvocationResolution", "resolve_invocation",
 ]

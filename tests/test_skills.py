@@ -244,11 +244,19 @@ class TestSessionLifecycle(unittest.TestCase):
         self.assertEqual(self.sess.reactivation_block(msgs, self.cat, 2), "")
 
     def test_s12_reactivation_after_trim_once(self):
-        self.sess.record_activation("pdf-reader", self.cat.get("pdf-reader").fingerprint, 1)
+        # Same task turn: activation at turn 2, still turn 2 when trimmed -> restore once.
+        self.sess.record_activation("pdf-reader", self.cat.get("pdf-reader").fingerprint, 2)
         trimmed = [{"role": "user", "content": "continue"}]
         block = self.sess.reactivation_block(trimmed, self.cat, 2)
         self.assertIn("USE-PDFTOTEXT", block)
-        self.assertEqual(self.sess.reactivation_block(trimmed, self.cat, 3), "")
+        # Once only, even on repeat calls within the same turn.
+        self.assertEqual(self.sess.reactivation_block(trimmed, self.cat, 2), "")
+
+    def test_s12b_no_restore_after_task_boundary(self):
+        # Activated in task turn 1; a later turn (2) must NOT auto-restore it.
+        self.sess.record_activation("pdf-reader", self.cat.get("pdf-reader").fingerprint, 1)
+        trimmed = [{"role": "user", "content": "new unrelated task"}]
+        self.assertEqual(self.sess.reactivation_block(trimmed, self.cat, 2), "")
 
     def test_s13_changed_fingerprint_not_silently_reserved(self):
         self.sess.record_activation("pdf-reader", "stale-fingerprint", 1)

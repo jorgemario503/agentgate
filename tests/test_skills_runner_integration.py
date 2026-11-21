@@ -13,11 +13,15 @@ import core.skills as skills
 from runners.local import LocalAgentClient
 
 
-def _write_skill(root, name, description="A skill.", body="BODY"):
+def _write_skill(root, name, description="A skill.", body="BODY", triggers=None):
     d = Path(root) / name
     d.mkdir(parents=True, exist_ok=True)
+    meta = ""
+    if triggers:
+        lines = "".join(f"      - {t}\n" for t in triggers)
+        meta = f"metadata:\n  agentgate:\n    triggers:\n{lines}"
     (d / "SKILL.md").write_text(
-        f"---\nname: {name}\ndescription: {description}\n---\n\n{body}"
+        f"---\nname: {name}\ndescription: {description}\n{meta}---\n\n{body}"
     )
 
 
@@ -43,21 +47,22 @@ class TestDisabledOutgoing(unittest.TestCase):
         self.assertIsNone(c._skills_context)
         self.assertIsNone(c._skill_session)
         self.assertEqual(c.skills_recommendation("do a thing"), "")
-        self.assertEqual(c._skill_reactivation_context(), "")
+        self.assertEqual(c._skill_reactivation_messages(), [])
 
 
 class TestModeBAbstention(unittest.TestCase):
     def test_s14_unrelated_task_abstains(self):
         tmp = tempfile.mkdtemp()
-        _write_skill(tmp, "pdf-reader", description="Extract text from PDF documents.")
+        _write_skill(tmp, "pdf-reader", description="Extract text from PDF documents.",
+                     triggers=["read pdf", "extract pdf text"])
         c = _client(tmp, enabled=True, mode="recommend")
-        # Unrelated request -> no recommendation -> no nudge.
+        # Unrelated request -> no recommendation -> no nudge (trigger-based).
         self.assertEqual(c.skills_recommendation("deploy the kubernetes cluster"), "")
 
     def test_related_request_recommends_by_name_only(self):
         tmp = tempfile.mkdtemp()
         _write_skill(tmp, "pdf-reader", description="Extract text from PDF documents.",
-                     body="SECRET-INSTRUCTION")
+                     body="SECRET-INSTRUCTION", triggers=["extract text"])
         c = _client(tmp, enabled=True, mode="recommend")
         nudge = c.skills_recommendation("please extract text from this pdf")
         self.assertIn("pdf-reader", nudge)
@@ -66,7 +71,8 @@ class TestModeBAbstention(unittest.TestCase):
 
     def test_mode_model_never_recommends(self):
         tmp = tempfile.mkdtemp()
-        _write_skill(tmp, "pdf-reader", description="Extract text from PDF documents.")
+        _write_skill(tmp, "pdf-reader", description="Extract text from PDF documents.",
+                     triggers=["extract text"])
         c = _client(tmp, enabled=True, mode="model")
         self.assertEqual(c.skills_recommendation("extract text from pdf"), "")
 
@@ -86,14 +92,15 @@ class TestOutgoingMessageInjection(unittest.TestCase):
         )
         out = c._build_outgoing_messages()
         joined = "\n".join(m.get("content", "") for m in out)
-        # Body appears exactly once; no reactivation block prepended.
+        # Body appears exactly once; no restore message prepended.
         self.assertEqual(joined.count("USE-PDFTOTEXT"), 1)
-        self.assertNotIn("Re-applying", joined)
+        self.assertNotIn(skills.RESTORE_LABEL, joined)
 
-    def test_s12_trimmed_body_reactivated_as_volatile_not_prefix(self):
+    def test_s12_trimmed_body_restored_same_turn_lower_trust(self):
         tmp = tempfile.mkdtemp()
         _write_skill(tmp, "pdf-reader", body="USE-PDFTOTEXT")
         c = _client(tmp, enabled=True)
+        c._skill_turn = 1  # current task turn
         c.messages = [
             {"role": "system", "content": "SYS"},
             {"role": "user", "content": "read the pdf"},
@@ -103,11 +110,31 @@ class TestOutgoingMessageInjection(unittest.TestCase):
             "pdf-reader", c._skills_context.catalog.get("pdf-reader").fingerprint, 1
         )
         out = c._build_outgoing_messages()
-        # Reactivation appears as a system message before the last user turn.
-        self.assertEqual(out[0], {"role": "system", "content": "SYS"})  # stable prefix intact
-        joined = "\n".join(m.get("content", "") for m in out)
+        # Stable prefix (system slot 0) untouched.
+        self.assertEqual(out[0], {"role": "system", "content": "SYS"})
+        joined = "\n".join(str(m.get("content", "")) for m in out)
         self.assertIn("USE-PDFTOTEXT", joined)
-        # Not duplicated into the stable prefix (system slot 0 unchanged).
+        # Restored as a USER-role lower-trust message, never a system message.
+        restore = [m for m in out if skills.RESTORE_LABEL in str(m.get("content", ""))]
+        self.assertTrue(restore)
+        self.assertTrue(all(m["role"] == "user" for m in restore))
+
+    def test_s12b_previous_task_not_auto_restored(self):
+        tmp = tempfile.mkdtemp()
+        _write_skill(tmp, "pdf-reader", body="USE-PDFTOTEXT")
+        c = _client(tmp, enabled=True)
+        c._skill_turn = 2  # a later task turn
+        c.messages = [
+            {"role": "system", "content": "SYS"},
+            {"role": "user", "content": "unrelated new task"},
+        ]
+        c._skill_session.record_activation(
+            "pdf-reader", c._skills_context.catalog.get("pdf-reader").fingerprint, 1
+        )
+        out = c._build_outgoing_messages()
+        joined = "\n".join(str(m.get("content", "")) for m in out)
+        # Not restored on a later, unrelated task.
+        self.assertNotIn("USE-PDFTOTEXT", joined)
 
 
 class TestRegistryIntegration(unittest.TestCase):
