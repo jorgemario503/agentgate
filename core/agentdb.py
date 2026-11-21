@@ -73,14 +73,18 @@ def init_agentdb_for(runner: Any, platform: Any, *, config: Any) -> None:
 def build_consolidation_llm_fn(provider: str) -> Any:
     """Build a sync ``llm_fn`` for AgentDB consolidation synthesis, or None.
 
-    Returns None (consolidation stays copy-only / inert) unless:
-    * ``AGENTDB_CONSOLIDATION_ENABLED`` is on, AND
+    Returns None (consolidation stays copy-only / inert) unless ALL of:
+    * ``AGENTDB_CONSOLIDATION_ENABLED`` is on,
     * a consolidation model is configured for the provider
-      (``{PREFIX}_CONSOLIDATION_MODEL`` or a global ``CONSOLIDATION_MODEL``).
+      (``{PREFIX}_CONSOLIDATION_MODEL`` or a global ``CONSOLIDATION_MODEL``), and
+    * the agentdb package exposes ``make_llm_fn`` (structural helper).
 
-    The returned callable takes one prompt string and returns the synthesized
-    text, using a dedicated (sync) OpenAI-compatible client on the configured
-    consolidation model — the same "cheaper model" pattern as SUMMARY_MODEL.
+    The actual client-to-``llm_fn`` wrapping lives in the **agentdb package**
+    (``agentdb.providers.consolidation.make_llm_fn``); AgentGate only resolves
+    its own config + constructs the client. Until the installed agentdb ships
+    that helper, this returns None (feature dormant), which is safe: the runner
+    then passes run_consolidation=False and behavior is unchanged.
+
     Never raises at build time; only the actual model call can error, and that
     is handled by the package (it falls back to the top source value).
     """
@@ -97,25 +101,22 @@ def build_consolidation_llm_fn(provider: str) -> Any:
         if not model:
             return None
 
+        # The provider-agnostic wrapper belongs to agentdb. Import lazily so an
+        # older install (no helper) simply leaves consolidation dormant.
+        from agentdb.providers.consolidation import make_llm_fn
+
         from openai import OpenAI  # sync client — llm_fn is a plain callable
 
         client = OpenAI(
             api_key=settings.api_key or "not-needed",
             base_url=settings.base_url or "https://api.deepinfra.com/v1/openai",
         )
-
-        def _llm_fn(prompt: str) -> str:
-            kwargs: dict[str, Any] = {"model": model, "messages": [
-                {"role": "user", "content": prompt},
-            ]}
-            if settings.consolidation_max_tokens is not None:
-                kwargs["max_tokens"] = settings.consolidation_max_tokens
-            if settings.consolidation_temperature is not None:
-                kwargs["temperature"] = settings.consolidation_temperature
-            resp = client.chat.completions.create(**kwargs)
-            return (resp.choices[0].message.content or "").strip()
-
-        return _llm_fn
+        return make_llm_fn(
+            client,
+            model,
+            max_tokens=settings.consolidation_max_tokens,
+            temperature=settings.consolidation_temperature,
+        )
     except Exception:
         return None
 

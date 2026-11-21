@@ -124,12 +124,22 @@ class TestBuildConsolidationLlmFn(unittest.TestCase):
         self.assertIsNone(fn)
 
     def test_enabled_with_model_returns_callable(self):
-        # Build must happen while env vars are still set (inside _fn's try).
+        # With enabled + a model, the result is a callable ONLY if the agentdb
+        # package ships make_llm_fn (the wrapper now lives in agentdb). Until it
+        # does, the feature is dormant -> None.
+        try:
+            import agentdb.providers.consolidation  # noqa: F401
+            helper_present = True
+        except ImportError:
+            helper_present = False
         fn = self._fn({"AGENTDB_CONSOLIDATION_ENABLED": "true",
                        "DEEPINFRA_CONSOLIDATION_MODEL": "small",
                        "DEEPINFRA_API_KEY": "x",
                        "DEEPINFRA_BASE_URL": "https://example/v1"})
-        self.assertTrue(callable(fn))
+        if helper_present:
+            self.assertTrue(callable(fn))
+        else:
+            self.assertIsNone(fn)
 
     def test_unknown_provider_returns_none(self):
         fn = self._fn({"AGENTDB_CONSOLIDATION_ENABLED": "true",
