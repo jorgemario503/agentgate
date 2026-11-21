@@ -44,6 +44,12 @@ from core.reasoning import (
     resolve as resolve_reasoning,
 )
 from core.tools.registry import Tool, build_tools
+from core.skills import (
+    build_skills_context, SkillSession,
+    is_skill_read_tool, record_activation_from_result,
+    recommend, build_recommendation_nudge,
+    restoration_message, resolve_invocation,
+)
 from runners.base import (
     PlatformConfig, TaskInterrupted, check_blocked,
     _describe_ask_user_question, _resolve_ask_user_answer, _describe_tool_call,
@@ -58,6 +64,17 @@ def _cfg_tool_compression_enabled() -> bool:
     """Whether native tool-result compression is enabled (read lazily)."""
     import core.config as _c
     return bool(_c.TOOL_COMPRESSION_ENABLED)
+
+
+def _skills_context():
+    """Build the shared skills context from config (OFF by default)."""
+    import core.config as _c
+    return build_skills_context(
+        enabled=bool(getattr(_c, "AGENTGATE_SKILLS_ENABLED", False)),
+        skills_dir=getattr(_c, "AGENTGATE_SKILLS_DIR", "skills"),
+        manifest_tokens=int(getattr(_c, "AGENTGATE_SKILLS_MANIFEST_TOKENS", 600)),
+        selection_mode=getattr(_c, "AGENTGATE_SKILLS_SELECTION_MODE", "model"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +307,8 @@ class FireworksAgentClient:
         context_window: int = DEFAULT_CONTEXT_WINDOW,
         on_compact: Optional[Callable[[str], None]] = None,
         tool_pipeline=None,
+        skills_context=None,
+        skill_session=None,
     ):
         self.model = model
         self.context_window = context_window
@@ -313,15 +332,27 @@ class FireworksAgentClient:
         self._ephemeral_context: Optional[str] = None
         self.on_compact = on_compact
         self._tool_pipeline = tool_pipeline
+        # Open-model skills (OFF by default); see runners/local.py.
+        self._skills_context = skills_context
+        self._skill_session = skill_session
+        self._skill_turn = 0
+        self._explicit_skill_message = None
 
     async def connect(self) -> None:
         self.messages = apply_system_prompt(
             self.session_store.load(self.session_id), self.system_prompt
         )
 
-    async def query(self, prompt: str, ephemeral_context: Optional[str] = None) -> None:
+    async def query(self, prompt: str, ephemeral_context: Optional[str] = None,
+                    explicit_skill_message: Optional[dict] = None) -> None:
         self.messages.append({"role": "user", "content": prompt})
         self._ephemeral_context = ephemeral_context
+        # Explicit //skill body is a lower-trust user message (spec §5), added
+        # after the task so normal lifecycle rules apply — never a system role.
+        self._explicit_skill_message = explicit_skill_message
+        if explicit_skill_message is not None:
+            self.messages.append(explicit_skill_message)
+        self._skill_turn += 1
 
     def _trim_history(self) -> None:
         system_msg = None
@@ -358,14 +389,42 @@ class FireworksAgentClient:
 
         self.messages = ([system_msg] if system_msg else []) + [m for turn in kept for m in turn]
 
+    def skills_recommendation(self, user_request: str) -> str:
+        """Mode B: short volatile nudge to read a likely skill (never a body)."""
+        if self._skills_context is None or not self._skills_context.enabled:
+            return ""
+        if self._skills_context.mode != "recommend":
+            return ""
+        recs = recommend(self._skills_context.catalog, user_request=user_request)
+        return build_recommendation_nudge(recs)
+
+    def _skill_reactivation_messages(self) -> list[dict]:
+        """At most one lower-trust restore message for a trimmed active skill.
+
+        Only within the same task the skill was activated in. Delivered as a
+        USER-role labeled message (spec §5), never as system.
+        """
+        if self._skill_session is None or self._skills_context is None:
+            return []
+        blocks = self._skill_session.reactivation_block(
+            self.messages, self._skills_context.catalog, self._skill_turn
+        )
+        if not blocks:
+            return []
+        name = self._skill_session.last_reactivated_name or "skill"
+        return [restoration_message(name, blocks)]
+
     def _build_outgoing_messages(self) -> list[dict]:
-        if not self._ephemeral_context:
-            return self.messages
         messages = list(self.messages)
-        for i in range(len(messages) - 1, -1, -1):
-            if messages[i].get("role") == "user":
-                messages.insert(i, {"role": "system", "content": self._ephemeral_context})
-                break
+        skill_msgs = self._skill_reactivation_messages()
+        if skill_msgs or self._ephemeral_context:
+            for i in range(len(messages) - 1, -1, -1):
+                if messages[i].get("role") == "user":
+                    for m in reversed(skill_msgs):
+                        messages.insert(i, m)
+                    if self._ephemeral_context:
+                        messages.insert(i, {"role": "system", "content": self._ephemeral_context})
+                    break
         return messages
 
     async def _maybe_compact_history(self) -> None:
@@ -637,11 +696,14 @@ class FireworksAgentClient:
                 else:
                     result_text = await self._run_handler(tool, args)
 
-                if self._tool_pipeline is not None:
+                # Skill instructions must be returned exactly: bypass lossy
+                # compression and cap-based summarisation for skill_read.
+                _is_skill_read = self._skill_session is not None and is_skill_read_tool(name)
+                if self._tool_pipeline is not None and not _is_skill_read:
                     result_text = self._tool_pipeline.process(
                         result_text, tool_name=name)
                 cap = self._max_tool_result_chars
-                if len(result_text) > cap:
+                if not _is_skill_read and len(result_text) > cap:
                     print(f"[fireworks] tool '{name}' returned {len(result_text):,} chars "
                           f"(cap {cap:,}) — chunk-summarizing")
                     result_text = await self._summarize_tool_result(result_text, name)
@@ -651,6 +713,11 @@ class FireworksAgentClient:
                     "tool_call_id": tc["id"],
                     "content": result_text,
                 })
+                if _is_skill_read:
+                    record_activation_from_result(
+                        self._skill_session, self._skills_context.catalog,
+                        name, args, result_text, self._skill_turn,
+                    )
 
         yield ResultMessage(
             session_id=self.session_id, is_error=True,
@@ -901,13 +968,16 @@ class FireworksRunner:
             platform.session_store.get_session_meta(thread_id),
             self.has_client(thread_id),
         )
+        skills_ctx = _skills_context()
         system_prompt = build_system_prompt(
             state=state,
             history_path=str(history_store.directory / f"{thread_id}.json"),
             workspace_path=workspace_path,
             agentdb_middleware=self._agentdb_middleware,
             session_id=thread_id,
+            skills_manifest=skills_ctx.manifest,
         )
+        skill_session = SkillSession(skills_ctx.catalog) if skills_ctx.enabled else None
 
         on_compact = None
         if self._agentdb is not None:
@@ -936,6 +1006,7 @@ class FireworksRunner:
                 workspace_path, store,
                 output_cap=_OUTPUT_CAP, bash_timeout=_BASH_TIMEOUT_SECONDS,
                 pipeline=_tool_pipeline,
+                skills_catalog=skills_ctx.catalog if skills_ctx.enabled else None,
             ),
             system_prompt=system_prompt,
             can_use_tool=_make_permission_callback(
@@ -945,6 +1016,8 @@ class FireworksRunner:
             session_store=history_store,
             on_compact=on_compact,
             tool_pipeline=_tool_pipeline,
+            skills_context=skills_ctx if skills_ctx.enabled else None,
+            skill_session=skill_session,
         )
         await client.connect()
         self._clients[thread_id] = client
@@ -979,6 +1052,15 @@ class FireworksRunner:
                     thread_id, workspace_path, resume_session_id, post_fn, platform,
                 )
 
+                # Mode C: //skill-name invocation (shared parsing/activation).
+                invocation = resolve_invocation(
+                    prompt, client._skills_context, client._skill_session,
+                    client._skill_turn + 1,
+                )
+                if invocation.error_reply is not None:
+                    return invocation.error_reply, client.session_id
+                prompt = invocation.task
+
                 memory_context = None
                 if self._agentdb_middleware is not None:
                     messages, _ = await self._agentdb_middleware.prepare_turn_async(
@@ -1002,7 +1084,14 @@ class FireworksRunner:
                             memory_context = ((memory_context + "\n\n") if memory_context else "") + _seg
                     except Exception:
                         pass
-                await client.query(prompt, ephemeral_context=memory_context)
+
+                _skill_nudge = client.skills_recommendation(prompt)
+                if _skill_nudge:
+                    memory_context = ((memory_context + "\n\n") if memory_context else "") + _skill_nudge
+                await client.query(
+                    prompt, ephemeral_context=memory_context,
+                    explicit_skill_message=invocation.explicit_message,
+                )
 
                 text_parts: list[str] = []
                 async for message in client.receive_response():

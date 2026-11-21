@@ -113,6 +113,27 @@ REPO_MAP_ENABLED = _env_bool("AGENTGATE_REPO_MAP_ENABLED")
 REPO_MAP_MAX_TOKENS = int(os.environ.get("AGENTGATE_REPO_MAP_MAX_TOKENS", 1500))
 
 # -------------------------
+# OPEN-MODEL SKILLS (Agent Skills; OFF by default)
+#
+# On-demand, model-selected skill instructions for the open-model runners
+# (local / fireworks / deepinfra). Claude and AgentDB are excluded by design.
+# With AGENTGATE_SKILLS_ENABLED=false (the default) nothing here is consulted,
+# and outbound requests are byte-for-byte unchanged.
+# See docs/spec/skills/DECISIONS.md.
+# -------------------------
+AGENTGATE_SKILLS_ENABLED = _env_bool("AGENTGATE_SKILLS_ENABLED")
+# One operator-configured catalog shared by all open-model runners.
+AGENTGATE_SKILLS_DIR = os.environ.get("AGENTGATE_SKILLS_DIR", "skills")
+# Token budget for the compact skills manifest in the stable prompt section.
+AGENTGATE_SKILLS_MANIFEST_TOKENS = int(
+    os.environ.get("AGENTGATE_SKILLS_MANIFEST_TOKENS", 600)
+)
+# "model" (A: model-selected) or "recommend" (B: harness-assisted nudges).
+AGENTGATE_SKILLS_SELECTION_MODE = os.environ.get(
+    "AGENTGATE_SKILLS_SELECTION_MODE", "model"
+).strip().lower()
+
+# -------------------------
 # SECURITY LAYER 1 — hard blocks on both user messages and generated Bash commands
 # -------------------------
 BLOCKED_PATTERNS = [

@@ -31,7 +31,7 @@ core/
                                                      tool_pipeline, repo_map, compression
   commands/      # command registry                  commands.py
   runtime/       # approvals, cache_key, reasoning/  approvals.py, cache_key.py
-  skills/        # file-based skills (future)        see docs/spec/open-model-skills.md
+  skills/        # Agent Skills (DONE)               catalog.py + __init__ re-export
 ```
 
 Each is a package with an `__init__.py`; submodules keep their current names so
@@ -48,6 +48,9 @@ touching:
    Runners import `Tool, build_tools` from it and pass their provider caps
    (`output_cap`, `bash_timeout`) as parameters. Claude is unaffected (it uses
    the SDK tools + its own MCP server).
+1b. **`core/skills/` — DONE.** The open-model Agent Skills concern landed
+   as a package (`core/skills.py` -> `core/skills/{__init__,catalog}.py`);
+   callers keep importing from `core.skills` via the re-export.
 2. Next candidates, when each is touched for another reason (no churn for its
    own sake): `core/context/` (the compression/repo-map cluster added recently),
    then `core/sessions/`, then `core/config/`.

@@ -378,6 +378,141 @@ For semantic retrieval, set `embeddings: {enabled: true}` in
 
 ---
 
+## Skills (open-model, opt-in — OFF by default)
+
+Open-model runners (`local`, `fireworks`, `deepinfra`) can load **Agent Skills**:
+portable `SKILL.md` files that give the agent task-specific procedures on demand.
+The agent sees a compact manifest of available skills and reads a skill's full
+instructions only when relevant. **Claude and AgentDB are not involved** — this is
+a separate, opt-in capability.
+
+Skills are **off by default**. When disabled, requests are byte-for-byte
+unchanged.
+
+### Quick start
+
+1. Enable the feature in `.env`:
+
+   ```env
+   AGENTGATE_SKILLS_ENABLED=true
+   ```
+
+2. Put one folder per skill under the configured catalog (`AGENTGATE_SKILLS_DIR`,
+   default `skills/`), each with a `SKILL.md`:
+
+   ```
+   skills/
+     create-ticket/
+       SKILL.md
+   ```
+
+   ```markdown
+   ---
+   name: create-ticket
+   description: Create internal tickets using our required format.
+   ---
+
+   # Ticket format
+   - Title prefix: [PAY] for payments, [OPS] for ops.
+   - Sections: Summary, Impact, Steps to Reproduce, Owner.
+   - If the owner is unknown, write "Owner: UNASSIGNED" — do not invent a name.
+   ```
+
+   The `name` must be lowercase, hyphen-separated, and match the folder name.
+
+### Recommended configuration (Mode A — model-selected)
+
+When enabling skills, use the default model-selected mode:
+
+```env
+AGENTGATE_SKILLS_ENABLED=true
+AGENTGATE_SKILLS_DIR=skills
+AGENTGATE_SKILLS_MANIFEST_TOKENS=600
+AGENTGATE_SKILLS_SELECTION_MODE=model
+```
+
+The model decides when a skill is relevant and calls `skill_read`; "no skill" is a
+valid choice. In controlled evaluation this roughly doubled task success on
+specialized workflows while cutting cost per successful task. (Results are
+workload- and model-specific — see `docs/spec/skills-validation/`.)
+
+### Explicit invocation (Mode C — `//skill-name`)
+
+Users can force a skill for one message by prefixing it with `//<skill-name>`
+(works automatically whenever skills are enabled — no extra flag):
+
+```text
+//create-ticket Create a ticket for the payment retry issue.
+//review-pr Review the authentication changes in PR 124.
+```
+
+The skill's instructions are loaded before the task runs. Explicit invocation
+**does not bypass tool approvals** — normal permission checks still apply.
+Unknown skill names produce a clear error (no silent substitution).
+
+### Experimental: keyword recommendations (Mode B)
+
+An optional mode can nudge the model toward a skill when the request matches
+skill-declared trigger phrases:
+
+```env
+AGENTGATE_SKILLS_SELECTION_MODE=recommend
+```
+
+Triggers live in the `SKILL.md` frontmatter:
+
+```yaml
+metadata:
+  agentgate:
+    triggers:
+      - create a ticket
+      - usual ticket format
+```
+
+Mode B is **experimental and not recommended by default**: evaluation showed no
+material benefit over Mode A, and it adds a false-positive surface (it may suggest
+a skill that isn't needed). Recommendations are lower-priority hints only — they
+never force activation or include the skill body.
+
+### Security model
+
+- Skills are **operator-controlled files** you place in the catalog.
+- Skill instructions are **lower-trust reference content**, delivered as clearly
+  labeled user-role messages — never system instructions. They cannot override the
+  hard rules or grant additional tool permissions (`allowed-tools` in a skill is
+  informational only).
+- Loads are **path-contained**: `SKILL.md` must resolve inside the catalog (no
+  symlink/traversal escapes), and a skill body whose fingerprint changed since it
+  was read is not silently restored.
+- These safeguards reduce risk but **do not establish immunity to all prompt
+  injection** — only add skills you trust as you would any code.
+
+### Multi-turn behavior
+
+- Skill instructions are not repeated while they remain in context.
+- If a skill's body is trimmed/compacted **within the active task turn**, it is
+  restored once.
+- A **subsequent user turn does not automatically restore** an earlier skill body;
+  the model can `skill_read` again if still relevant. This keeps context lean.
+
+### Caching
+
+The skills manifest sits in the **stable prompt prefix**, which providers cache
+across turns — the same mechanism as the rest of the system prompt. That provider
+prefix cache is **not** agent memory: it does not make the model "remember" a
+skill across sessions. Skill state is session-local and reset per session.
+
+Configuration (defaults shown):
+
+```
+AGENTGATE_SKILLS_ENABLED=false
+AGENTGATE_SKILLS_DIR=skills
+AGENTGATE_SKILLS_MANIFEST_TOKENS=600
+AGENTGATE_SKILLS_SELECTION_MODE=model
+```
+
+---
+
 ## Security
 
 - **Blocked patterns** — `BLOCKED_PATTERNS` in `core/config.py` (settable via
@@ -408,7 +543,8 @@ agentgate/
 │                             #            fireworks.py, local.py
 ├── core/                     # shared: config, providers, sessions, prompts,
 │                             #   history, cache_key, approvals, commands,
-│                             #   agentdb, reasoning/
+│                             #   agentdb, skills/, reasoning/
+├── skills/                   # open-model Agent Skills catalog (opt-in; examples)
 └── tests/
 ```
 
