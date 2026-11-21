@@ -45,6 +45,13 @@ Two dependency rules are non-negotiable:
 If you find yourself copying a block from one bot to another, that block
 belongs in `core/`.
 
+**Group `core/` modules by concern, not by file type.** A flat `core/` drifts
+once it mixes unrelated responsibilities. Where a subsystem grows, it becomes a
+package (`core/<concern>/` with an `__init__.py` re-exporting the public API, so
+callers keep importing `from core.<concern> import ...` unchanged). `core/tools/`
+and `core/skills/` already follow this pattern; new subpackages should too. Do
+not invent a `misc/` or `utils/` bucket — that just relocates the flat problem.
+
 ---
 
 ## The command registry
@@ -113,6 +120,23 @@ Guidance:
 python -m pytest -q                                  # everything
 python -m pytest tests/test_command_registry.py -q   # one file
 ```
+
+**Refreshing the reasoning registry.** `core/reasoning/registry.py` is a
+hand-curated `provider -> model-pattern -> style` table. When a provider ships
+models the registry has not seen, refresh the generated fragment from the live
+catalog instead of editing by hand:
+
+```bash
+python scripts/refresh_reasoning_registry.py           # show the diff
+python scripts/refresh_reasoning_registry.py --apply   # write the fragment
+```
+
+It reads DeepInfra's `/models` `metadata.tags` (`reasoning_effort` -> style
+`reasoning_effort`; `reasoning` alone -> `model_variant`) and writes
+`core/reasoning/registry_generated.py`, which `registry.py` layers *under* the
+hand-written patterns (an explicit human entry always wins). Fireworks publishes
+no reasoning tag, so its coverage is matched by family name and must be
+re-probed when a new family ships. Review the diff like any other code change.
 
 ---
 

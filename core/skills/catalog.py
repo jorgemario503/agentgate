@@ -5,7 +5,7 @@ no runner, provider, AgentDB or Claude knowledge. The three open-model runners
 (local / fireworks / deepinfra) each call these helpers from their existing
 client build seam; nothing here is duplicated per runner.
 
-Design boundaries (see docs/spec/skills/DECISIONS.md):
+Design boundaries:
 
 - Format: the Agent Skills standard — a directory per skill containing a
   ``SKILL.md`` with YAML frontmatter (``name``, ``description`` required;

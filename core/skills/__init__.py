@@ -3,8 +3,8 @@
 The implementation lives in :mod:`core.skills.catalog`; this package re-exports
 its public API so callers can keep importing from ``core.skills`` unchanged
 (``from core.skills import discover, SkillSession, ...``). This follows the
-concern-package layout in ``docs/core-structure.md`` (``core/skills/``), mirroring
-``core/tools/``.
+concern-package layout used by ``core/tools/`` (group modules by concern, not by
+file type), here as ``core/skills/``.
 """
 from __future__ import annotations
 

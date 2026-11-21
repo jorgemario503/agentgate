@@ -1,7 +1,7 @@
 # Context efficiency (native tool-result compression)
 
-Status: **Phase 1 implemented, default OFF.** Optional feature; nothing changes
-unless you set a flag. See `docs/spec/` for the full multi-phase design.
+Status: **implemented, default OFF.** Optional feature; nothing changes unless
+you set a flag. This page is the operator and contributor guide for the feature.
 
 ## What it does
 
@@ -132,11 +132,31 @@ Covers: disabled == identity, log/JSON/dense/traceback transforms, fail-open,
 store-unavailable refusal, retrieval round-trip, cross-session isolation,
 path/symlink security, metadata + prefix stability.
 
-## Benchmark
+## Measuring the effect
 
-Offline replay harness and results: see [context-efficiency-benchmark.md](context-efficiency-benchmark.md).
-Run it with `python -m core.benchmark`.
+An offline, deterministic replay harness ships with the project:
 
-## Background
+```bash
+python -m core.benchmark
+```
 
-Phase 0 discovery (call paths, integration point, baseline): see [context-efficiency-discovery.md](context-efficiency-discovery.md).
+It runs built-in synthetic fixtures (a repetitive log, a large JSON array with
+an anomaly, a dense minified asset, and a repeated file read) through three
+variants — baseline (raw), compression only, and compression + dedup — and
+prints per-session token estimates (~chars/3.5). It makes **no network or model
+calls**; the numbers are estimates on synthetic fixtures, useful for comparing
+configurations, not a production measurement.
+
+To exercise the same feature against a real model, use the opt-in live checks
+(they are budget-guarded and skipped by default):
+
+```bash
+AGENTGATE_LIVE_TESTS=1 AGENTGATE_LIVE_TOKEN_BUDGET=6000 \
+  python -c "from core.live_task_check import run_task_correctness; print(run_task_correctness())"
+```
+
+These reuse the configured `DEEPINFRA_*` environment variables and model id and
+enclose the whole run in a hard cumulative token budget. With `AGENTGATE_LIVE_TESTS`
+unset (the default) they do not run and cost nothing. See
+[live-tests.md](live-tests.md) for the full operator guide (enabling, budget
+semantics, reading results).

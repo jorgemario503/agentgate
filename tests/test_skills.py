@@ -1,8 +1,7 @@
 """Deterministic offline tests for the open-model Agent Skills feature.
 
-Covers the S01-S18 cases from docs/spec/open-model-spec.md section 10. These
-tests exercise real behavior (catalog discovery, tool handlers, session state,
-outgoing messages), and assert that the disabled path is unchanged.
+These tests exercise real behavior (catalog discovery, tool handlers, session
+state, outgoing messages), and assert that the disabled path is unchanged.
 """
 import tempfile
 import unittest

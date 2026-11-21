@@ -88,7 +88,7 @@ AGENTDB_PERMISSIONS_PATH = os.environ.get("AGENTDB_PERMISSIONS_PATH", "permissio
 # -------------------------
 # CONTEXT EFFICIENCY (optional; every flag OFF by default)
 #
-# Native token-efficiency features (see docs/spec/). Compression is LOSSY in the
+# Native token-efficiency features (see docs/context-efficiency.md). Compression is LOSSY in the
 # model-facing message, but the original is always kept and retrievable, and it
 # is NOT redaction: it never scrubs secrets. With every flag off, outbound
 # requests are byte-for-byte unchanged.
@@ -119,7 +119,7 @@ REPO_MAP_MAX_TOKENS = int(os.environ.get("AGENTGATE_REPO_MAP_MAX_TOKENS", 1500))
 # (local / fireworks / deepinfra). Claude and AgentDB are excluded by design.
 # With AGENTGATE_SKILLS_ENABLED=false (the default) nothing here is consulted,
 # and outbound requests are byte-for-byte unchanged.
-# See docs/spec/skills/DECISIONS.md.
+# See the "Skills" section of README.md.
 # -------------------------
 AGENTGATE_SKILLS_ENABLED = _env_bool("AGENTGATE_SKILLS_ENABLED")
 # One operator-configured catalog shared by all open-model runners.

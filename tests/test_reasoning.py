@@ -262,7 +262,7 @@ def test_r1_and_gptoss_still_use_reasoning_effort_after_v4_entry():
 #
 # Fireworks has no reasoning tag in /models, so coverage is by family name.
 # Every Fireworks *chat* model was probe-confirmed to accept reasoning_effort
-# and return reasoning_content (see docs/reasoning-registry-source-of-truth.md).
+# and return reasoning_content.
 # Ids are "accounts/fireworks/models/<name>".
 
 @pytest.mark.parametrize(
