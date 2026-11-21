@@ -70,6 +70,56 @@ def init_agentdb_for(runner: Any, platform: Any, *, config: Any) -> None:
     db.lifecycle.run_sweep()
 
 
+def build_consolidation_llm_fn(provider: str) -> Any:
+    """Build a sync ``llm_fn`` for AgentDB consolidation synthesis, or None.
+
+    Returns None (consolidation stays copy-only / inert) unless:
+    * ``AGENTDB_CONSOLIDATION_ENABLED`` is on, AND
+    * a consolidation model is configured for the provider
+      (``{PREFIX}_CONSOLIDATION_MODEL`` or a global ``CONSOLIDATION_MODEL``).
+
+    The returned callable takes one prompt string and returns the synthesized
+    text, using a dedicated (sync) OpenAI-compatible client on the configured
+    consolidation model — the same "cheaper model" pattern as SUMMARY_MODEL.
+    Never raises at build time; only the actual model call can error, and that
+    is handled by the package (it falls back to the top source value).
+    """
+    try:
+        import core.config as _cfg
+
+        if not getattr(_cfg, "AGENTDB_CONSOLIDATION_ENABLED", False):
+            return None
+
+        from core.providers import settings_for
+
+        settings = settings_for(provider)
+        model = settings.consolidation_model
+        if not model:
+            return None
+
+        from openai import OpenAI  # sync client — llm_fn is a plain callable
+
+        client = OpenAI(
+            api_key=settings.api_key or "not-needed",
+            base_url=settings.base_url or "https://api.deepinfra.com/v1/openai",
+        )
+
+        def _llm_fn(prompt: str) -> str:
+            kwargs: dict[str, Any] = {"model": model, "messages": [
+                {"role": "user", "content": prompt},
+            ]}
+            if settings.consolidation_max_tokens is not None:
+                kwargs["max_tokens"] = settings.consolidation_max_tokens
+            if settings.consolidation_temperature is not None:
+                kwargs["temperature"] = settings.consolidation_temperature
+            resp = client.chat.completions.create(**kwargs)
+            return (resp.choices[0].message.content or "").strip()
+
+        return _llm_fn
+    except Exception:
+        return None
+
+
 class AgentDBSurface:
     """Forwards the shared AgentDB query calls to a middleware instance."""
 

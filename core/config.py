@@ -83,6 +83,14 @@ AGENTDB_ENABLED = os.environ.get("AGENTDB_ENABLED", "true").lower() in ("true", 
 #   (requires: pip install 'agentdatabase[local-embed]')
 AGENTDB_MEMORY_DIR = os.environ.get("AGENTDB_MEMORY_DIR", "agentdb-workspace")
 AGENTDB_PERMISSIONS_PATH = os.environ.get("AGENTDB_PERMISSIONS_PATH", "permissions.yaml")
+# Consolidation synthesis (llm_fn): OFF by default. When enabled AND a
+# consolidation model is configured ({PREFIX}_CONSOLIDATION_MODEL or a global
+# CONSOLIDATION_MODEL), AgentGate passes an llm_fn to end_session so consolidation
+# can synthesize a canonical instead of copying. Inert until the upstream
+# auto-consolidation dispatch is fixed (agentdb package spec §1); safe on/off.
+AGENTDB_CONSOLIDATION_ENABLED = os.environ.get(
+    "AGENTDB_CONSOLIDATION_ENABLED", "false"
+).lower() in ("true", "1", "yes")
 
 
 # -------------------------
