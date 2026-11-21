@@ -81,14 +81,39 @@ def test_summary_knobs_are_uniform_across_providers():
         assert settings.summary_max_tokens is not None or name == "deepinfra"
 
 
+def test_consolidation_knobs_resolve_like_summary():
+    # Fireworks ships a sensible consolidation default (mirrors its summary).
+    fw = settings_for("fireworks", environ={})
+    assert fw.consolidation_model == "accounts/fireworks/models/llama-v3p1-8b-instruct"
+    assert fw.consolidation_max_tokens == 3072
+    assert fw.consolidation_temperature == pytest.approx(0.2)
+    # Others default to None (no synthesis configured).
+    for name in ("deepinfra", "ollama", "mlx"):
+        assert settings_for(name, environ={}).consolidation_model is None
+    # Per-provider override, global fallback, and casting all work.
+    ov = settings_for("deepinfra", environ={"DEEPINFRA_CONSOLIDATION_MODEL": "m"})
+    assert ov.consolidation_model == "m"
+    assert ov.source_of("CONSOLIDATION_MODEL") == "provider"
+    gl = settings_for("deepinfra", environ={"CONSOLIDATION_MODEL": "g"})
+    assert gl.consolidation_model == "g"
+    assert gl.source_of("CONSOLIDATION_MODEL") == "global"
+    cast = settings_for(
+        "fireworks",
+        environ={"FIREWORKS_CONSOLIDATION_MAX_TOKENS": "1500", "FIREWORKS_CONSOLIDATION_TEMPERATURE": "0.3"},
+    )
+    assert cast.consolidation_max_tokens == 1500
+    assert cast.consolidation_temperature == pytest.approx(0.3)
+
+
 def test_iter_provider_vars_covers_every_spec():
     variables = iter_provider_vars()
     names = {name for name, _ in variables}
-    assert len(variables) == len(PROVIDERS) * 13
+    assert len(variables) == len(PROVIDERS) * 16
     assert "DEEPINFRA_MODEL" in names
     assert "FIREWORKS_MODEL" in names
     assert "OLLAMA_MODEL" in names
     assert "MLX_MODEL" in names
+    assert "DEEPINFRA_CONSOLIDATION_MODEL" in names
 
 
 # --------------------------------------------------------------------------

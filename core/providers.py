@@ -37,6 +37,9 @@ GLOBAL_OVERRIDABLE: tuple[str, ...] = (
     "SUMMARY_MAX_TOKENS",
     "SUMMARY_TEMPERATURE",
     "SUMMARY_CHUNK_CHARS",
+    "CONSOLIDATION_MODEL",
+    "CONSOLIDATION_MAX_TOKENS",
+    "CONSOLIDATION_TEMPERATURE",
 )
 
 # Provider-identity suffixes: no global layer.
@@ -82,6 +85,9 @@ class ProviderSpec:
     summary_max_tokens_default: int | None
     summary_temperature_default: float | None
     summary_chunk_chars_default: int
+    consolidation_model_default: str | None = None
+    consolidation_max_tokens_default: int | None = None
+    consolidation_temperature_default: float | None = None
     max_tool_iterations_default: int = 25
     tool_output_cap_default: int = 8_000
     bash_timeout_seconds_default: int = 120
@@ -106,6 +112,9 @@ class ProviderSpec:
             "SUMMARY_MAX_TOKENS": self.summary_max_tokens_default,
             "SUMMARY_TEMPERATURE": self.summary_temperature_default,
             "SUMMARY_CHUNK_CHARS": self.summary_chunk_chars_default,
+            "CONSOLIDATION_MODEL": self.consolidation_model_default,
+            "CONSOLIDATION_MAX_TOKENS": self.consolidation_max_tokens_default,
+            "CONSOLIDATION_TEMPERATURE": self.consolidation_temperature_default,
         }
 
 
@@ -137,6 +146,9 @@ PROVIDERS: dict[str, ProviderSpec] = {
         summary_max_tokens_default=3072,
         summary_temperature_default=0.2,
         summary_chunk_chars_default=20_000,
+        consolidation_model_default="accounts/fireworks/models/llama-v3p1-8b-instruct",
+        consolidation_max_tokens_default=3072,
+        consolidation_temperature_default=0.2,
     ),
     "ollama": ProviderSpec(
         name="ollama",
@@ -179,6 +191,8 @@ _CASTERS: dict[str, Callable[[str], Any]] = {
     "SUMMARY_CHUNK_CHARS": int,
     "TEMPERATURE": float,
     "SUMMARY_TEMPERATURE": float,
+    "CONSOLIDATION_MAX_TOKENS": int,
+    "CONSOLIDATION_TEMPERATURE": float,
 }
 
 
@@ -286,6 +300,18 @@ class ProviderSettings:
     @property
     def summary_chunk_chars(self) -> int:
         return self.get("SUMMARY_CHUNK_CHARS") or 20_000
+
+    @property
+    def consolidation_model(self) -> str | None:
+        return self.get("CONSOLIDATION_MODEL")
+
+    @property
+    def consolidation_max_tokens(self) -> int | None:
+        return self.get("CONSOLIDATION_MAX_TOKENS")
+
+    @property
+    def consolidation_temperature(self) -> float | None:
+        return self.get("CONSOLIDATION_TEMPERATURE")
 
     # --- validation ------------------------------------------------------------
     def require_model(self) -> str:
