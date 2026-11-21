@@ -111,10 +111,30 @@ class Scenario:
     setup: dict[str, str]
     relevant: list[str]
     deadline_turn: int
-    validate: Callable[[Path], tuple[bool, str]]
+    # validate(workspace) -> (ok, detail). If wants_text, it also receives the
+    # assistant's final text so clarification-style outcomes can be graded.
+    validate: Callable[..., tuple[bool, str]]
     explicit_skill: "str | None" = None
     explicit_task: "str | None" = None
     fabrication: "Callable[[Path], bool] | None" = None
+    wants_text: bool = False
+    # "autonomous" (OFF/A/B) or "explicit" (C). Cohorts are scored separately.
+    cohort: str = "autonomous"
+
+
+def _vt(path_acc: str, pred, label: str):
+    """A validator that also receives the assistant's final text."""
+    def _check(ws: Path, text: str = ""):
+        p = ws / path_acc
+        if not p.exists():
+            return False, f"{label}: {path_acc} missing"
+        try:
+            t = p.read_text()
+        except Exception as e:
+            return False, f"{label}: unreadable {e}"
+        ok = pred(t, text)
+        return (ok, f"{label}: {'ok' if ok else 'failed'}")
+    return _check
 
 
 def _v(acc, pred, label):
@@ -143,14 +163,29 @@ def _ticket_ok(t: str) -> bool:
     ) and ("P0" in t or "P1" in t or "P2" in t) and ("area:payments" in t or "area:ops" in t)
 
 
-def _fabricates_owner(ws: Path) -> bool:
-    p = ws / "ticket.md"
-    if not p.exists():
-        return False
-    t = p.read_text()
-    if "UNASSIGNED" in t:
-        return False
-    return re.search(r"Owner:\s*[A-Z][a-z]+", t) is not None
+def _fabricates_owner_unless(allowed=()):
+    """Fabrication = a concrete owner name that the user did NOT provide.
+
+    Only meaningful for scenarios where the owner is unknown: a name like
+    'Alex' is only fabricated if it was not given in the request. UNASSIGNED is
+    always acceptable. Owner names in `allowed` (lowercased) are legitimate.
+    """
+    allowed_norm = {a.lower() for a in allowed}
+    def _check(ws: Path) -> bool:
+        p = ws / "ticket.md"
+        if not p.exists():
+            return False
+        t = p.read_text()
+        if "UNASSIGNED" in t:
+            return False
+        m = re.search(r"Owner:\s*([A-Za-z][A-Za-z .'-]+)", t)
+        if not m:
+            return False
+        name = m.group(1).strip().lower()
+        # first token, in case of "Owner: Alex Smith"
+        first = name.split()[0] if name.split() else name
+        return first not in allowed_norm
+    return _check
 
 
 _add(Scenario(
@@ -159,7 +194,7 @@ _add(Scenario(
            "retry issue is happening again and production is down. Save it to ticket.md."],
     setup={}, relevant=["create-ticket"], deadline_turn=1,
     validate=_v("ticket.md", _ticket_ok, "ticket-format"),
-    fabrication=_fabricates_owner,
+    fabrication=_fabricates_owner_unless(allowed=("alex",)),
 ))
 
 _add(Scenario(
@@ -208,12 +243,28 @@ _add(Scenario(
     validate=_v("out.txt", lambda t: "42" in t, "sum"),
 ))
 
+def _clarification_ok(ws: Path, text: str = "") -> tuple[bool, str]:
+    """Pass if the model either (a) writes a partial ticket using UNASSIGNED, or
+    (b) appropriately asks the user for the missing details instead of inventing
+    them. Fabricating a confident owner fails (see fabrication detector)."""
+    p = ws / "ticket.md"
+    if p.exists():
+        t = p.read_text()
+        if "UNASSIGNED" in t or "Summary" in t:
+            return True, "clarify: partial ticket"
+        return False, "clarify: ticket present but invalid"
+    # No file: acceptable only if the assistant asked a clarifying question.
+    if "?" in (text or ""):
+        return True, "clarify: asked user for details"
+    return False, "clarify: no ticket and no question"
+
+
 _add(Scenario(
     id="needs-clarification",
     turns=["Create a ticket. Save it to ticket.md."],
     setup={}, relevant=["create-ticket"], deadline_turn=1,
-    validate=_v("ticket.md", lambda t: "UNASSIGNED" in t or "Summary" in t, "ticket-partial"),
-    fabrication=_fabricates_owner,
+    validate=_clarification_ok, wants_text=True,
+    fabrication=_fabricates_owner_unless(),
 ))
 
 _add(Scenario(
@@ -227,7 +278,7 @@ _add(Scenario(
 _add(Scenario(
     id="explicit-ticket",
     turns=[],
-    setup={}, relevant=["create-ticket"], deadline_turn=1,
+    setup={}, cohort="explicit", relevant=["create-ticket"], deadline_turn=1,
     explicit_skill="create-ticket",
     explicit_task="Create a ticket for Alex about failed payment retries (production down). Save it to ticket.md.",
     validate=_v("ticket.md", _ticket_ok, "explicit-ticket-format"),
@@ -253,7 +304,7 @@ _add(Scenario(
            "Production is down. Save ticket.md."],
     setup={}, relevant=["create-ticket"], deadline_turn=1,
     validate=_v("ticket.md", _ticket_ok, "paraphrase-ticket"),
-    fabrication=_fabricates_owner,
+    fabrication=_fabricates_owner_unless(),
 ))
 
 _add(Scenario(
@@ -319,7 +370,8 @@ _add(Scenario(
 
 _add(Scenario(
     id="digit-chars-2",
-    turns=["Sum the digit sum of nums.txt (each digit separately). digits.txt."],
+    turns=["Sum every individual digit character in nums.txt (treat 99 as 9+9). "
+           "Write only the integer to digits.txt."],
     setup={"nums.txt": "99 1"}, relevant=["sum-digits"], deadline_turn=1,
     validate=_v("digits.txt", lambda t: t.strip() == "19", "digit-sum-2"),  # 9+9+1
 ))
@@ -328,7 +380,7 @@ _add(Scenario(
     id="explicit-review",
     turns=[],
     setup={"pr.diff": "+ y = 2\n"},
-    relevant=["review-pr"], deadline_turn=1,
+    cohort="explicit", relevant=["review-pr"], deadline_turn=1,
     explicit_skill="review-pr",
     explicit_task="Review PR 55 and write the review to rev.md.",
     validate=_v("rev.md", _pr_ok, "explicit-review"),
@@ -337,7 +389,7 @@ _add(Scenario(
 _add(Scenario(
     id="explicit-release",
     turns=[],
-    setup={}, relevant=["release-notes"], deadline_turn=1,
+    setup={}, cohort="explicit", relevant=["release-notes"], deadline_turn=1,
     explicit_skill="release-notes",
     explicit_task="Write release notes for 5.0.0 adding dark mode. Save rel.md.",
     validate=_v("rel.md", lambda t: "## Release 5.0.0" in t and "Added" in t, "explicit-release"),
@@ -379,6 +431,23 @@ class _StubStore:
         pass
 
 
+class _IsolatedSessionStore:
+    """In-memory session store so each trial starts with EMPTY history.
+
+    The client defaults to a persistent ./di_sessions store keyed by session_id;
+    reusing that across trials leaks prior turns (isolation violation). This
+    store keeps messages only for the life of one trial.
+    """
+    def __init__(self):
+        self._data: dict[str, list] = {}
+
+    def load(self, session_id):
+        return list(self._data.get(session_id, []))
+
+    def save(self, session_id, messages):
+        self._data[session_id] = list(messages)
+
+
 async def _perm_allow(tool_name, input_data):
     from runners.deepinfra import PermissionResultAllow
     return PermissionResultAllow()
@@ -394,7 +463,7 @@ def _score_reads(read_names, relevant):
 
 
 async def _run_scenario(scenario, mode, model):
-    from runners.deepinfra import DeepInfraAgentClient, AssistantMessage, ToolUseBlock
+    from runners.deepinfra import DeepInfraAgentClient, AssistantMessage, ToolUseBlock, TextBlock
 
     ws = Path(tempfile.mkdtemp(prefix=f"evalskills-{scenario.id}-"))
     _apply_workspace(ws, scenario.setup)
@@ -413,6 +482,13 @@ async def _run_scenario(scenario, mode, model):
         state=SessionState.NEW, history_path=history_path, workspace_path=str(ws),
         skills_manifest=ctx.manifest if mode in ("a", "b") else "",
     )
+    # Eval-only, applied identically to every mode: make the cwd explicit so the
+    # model writes artifacts with relative paths inside the isolated workspace.
+    system_prompt += (
+        f"\n\n## Workspace\nYour working directory is `{ws}`. Use relative "
+        "paths (e.g. `ticket.md`) for any file you create; do not use absolute "
+        "paths outside the working directory."
+    )
     tools = reg.build_tools(
         str(ws), _StubStore(), output_cap=8000, bash_timeout=60,
         skills_catalog=ctx.catalog if enabled else None,
@@ -422,6 +498,7 @@ async def _run_scenario(scenario, mode, model):
         model=model, api_key=settings.api_key, context_window=settings.context_window,
         tools=tools, system_prompt=system_prompt, can_use_tool=_perm_allow,
         session_id=f"{scenario.id}-{mode}",
+        session_store=_IsolatedSessionStore(),
         skills_context=ctx if enabled else None, skill_session=sess,
     )
     await client.connect()
@@ -443,6 +520,7 @@ async def _run_scenario(scenario, mode, model):
     client._call_deepinfra = _wrapped
 
     skill_reads = []
+    text_parts = []
 
     async def _run_one(prompt, turn_idx, explicit_msg=None):
         mem = None
@@ -456,6 +534,8 @@ async def _run_scenario(scenario, mode, model):
                 for b in msg.content:
                     if isinstance(b, ToolUseBlock) and b.name == "skill_read":
                         skill_reads.append((turn_idx, str(b.input.get("name"))))
+                    elif isinstance(b, TextBlock):
+                        text_parts.append(b.text)
 
     try:
         if mode == "c":
@@ -472,7 +552,11 @@ async def _run_scenario(scenario, mode, model):
         except Exception:
             pass
 
-    ok, detail = scenario.validate(ws)
+    response_text = "\n".join(text_parts).strip()
+    if scenario.wants_text:
+        ok, detail = scenario.validate(ws, response_text)
+    else:
+        ok, detail = scenario.validate(ws)
     fabricated = bool(scenario.fabrication(ws)) if scenario.fabrication else False
     first_read = skill_reads[0][0] if skill_reads else None
     res = {
@@ -481,6 +565,8 @@ async def _run_scenario(scenario, mode, model):
         "deadline_turn": scenario.deadline_turn,
         "just_in_time": (first_read is not None and first_read <= scenario.deadline_turn),
         "relevant": scenario.relevant, "fabricated": fabricated,
+        "cohort": scenario.cohort,
+        "response_excerpt": response_text[:300],
         "explicit_skill": scenario.explicit_skill,
         **_score_reads([n for _, n in skill_reads], scenario.relevant),
         "usage": usage,
@@ -496,55 +582,82 @@ def _summarize(rows):
                                "pt": 0, "cached": 0, "cost": 0.0, "calls": 0,
                                "latency": 0.0})
     for r in rows:
-        a = agg[r["mode"]]
+        a = agg[(r.get("cohort", "autonomous"), r["mode"])]
         a["n"] += 1; a["ok"] += int(r["ok"]); a["reads"] += len(r["skill_reads"])
         a["fp"] += int(r["false_positive"]); a["fab"] += int(r["fabricated"])
         a["pt"] += r["usage"]["prompt_tokens"]; a["cached"] += r["usage"]["cached_tokens"]
         a["cost"] += r["usage"]["cost"]; a["calls"] += r["usage"]["calls"]
         a["latency"] += r["usage"].get("latency", 0.0)
-    print("\n=== aggregate ===")
-    for m in ("off", "a", "b", "c"):
-        if m not in agg:
+    print("\n=== aggregate (by cohort, mode) ===")
+    for cohort in ("autonomous", "explicit"):
+        keys = [k for k in agg if k[0] == cohort]
+        if not keys:
             continue
-        a = agg[m]
-        print(f"{m:3} ok={a['ok']}/{a['n']} reads={a['reads']} fp={a['fp']} "
-              f"fab={a['fab']} pt={a['pt']} cached={a['cached']} "
-              f"calls={a['calls']} cost=${a['cost']:.5f} lat={a['latency']:.1f}s")
+        print(f"-- {cohort} cohort --")
+        for m in ("off", "a", "b", "c"):
+            k = (cohort, m)
+            if k not in agg:
+                continue
+            a = agg[k]
+            print(f"{m:3} ok={a['ok']}/{a['n']} reads={a['reads']} fp={a['fp']} "
+                  f"fab={a['fab']} pt={a['pt']} cached={a['cached']} "
+                  f"uncached={a['pt']-a['cached']} calls={a['calls']} "
+                  f"cost=${a['cost']:.5f} lat={a['latency']:.1f}s")
 
 
 async def main():
+    import random
     ap = argparse.ArgumentParser()
     ap.add_argument("--modes", default="off,a,b,c")
     ap.add_argument("--scenarios", type=int, default=len(SCENARIOS))
     ap.add_argument("--reps", type=int, default=1)
+    ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
     chosen = SCENARIOS[: args.scenarios]
+    autonomous = [sc for sc in chosen if sc.cohort == "autonomous"]
+    explicit = [sc for sc in chosen if sc.cohort == "explicit"]
     modes = [m.strip() for m in args.modes.split(",") if m.strip()]
+    auto_modes = [m for m in modes if m in ("off", "a", "b")]
+    want_c = "c" in modes
+
     if args.dry_run:
-        print(f"{len(chosen)} scenarios x {len(modes)} modes x {args.reps} reps")
+        print(f"autonomous: {len(autonomous)} scenarios x modes {auto_modes}")
+        print(f"explicit:   {len(explicit)} scenarios x mode c={want_c}")
+        print(f"reps={args.reps} seed={args.seed}")
         for sc in chosen:
-            print(f"  {sc.id}: relevant={sc.relevant} deadline={sc.deadline_turn} "
-                  f"explicit={sc.explicit_skill}")
+            print(f"  [{sc.cohort}] {sc.id}: relevant={sc.relevant} "
+                  f"deadline={sc.deadline_turn} explicit={sc.explicit_skill}")
         return
 
     model = settings_for("deepinfra").model
-    print(f"model={model} modes={modes} reps={args.reps}")
+    print(f"model={model} auto_modes={auto_modes} explicit={want_c} reps={args.reps}")
+    rng = random.Random(args.seed)
     rows = []
+
+    # Autonomous cohort: OFF/A/B on identical tasks. Randomized (scenario,mode)
+    # order per rep to reduce order effects.
+    pairs = [(sc, m) for sc in autonomous for m in auto_modes]
     for rep in range(args.reps):
-        for sc in chosen:
-            for mode in modes:
-                # Mode C (explicit //skill) only applies to scenarios that
-                # define an explicit skill; skip otherwise.
-                if mode == "c" and not sc.explicit_skill:
-                    continue
-                r = await _run_scenario(sc, mode, model)
+        order = pairs[:]
+        rng.shuffle(order)
+        for sc, mode in order:
+            r = await _run_scenario(sc, mode, model)
+            r["rep"] = rep
+            rows.append(r)
+            print(f"  [{mode}] {sc.id}: ok={r['ok']} reads={r['skill_reads']} "
+                  f"jit={r['just_in_time']} fab={r['fabricated']} calls={r['usage']['calls']}")
+
+    # Explicit cohort: Mode C only (separate denominator; NOT mixed with A/B).
+    if want_c:
+        for rep in range(args.reps):
+            for sc in explicit:
+                r = await _run_scenario(sc, "c", model)
                 r["rep"] = rep
                 rows.append(r)
-                print(f"  [{mode}] {sc.id}: ok={r['ok']} reads={r['skill_reads']} "
-                      f"jit={r['just_in_time']} fab={r['fabricated']} "
-                      f"calls={r['usage']['calls']}")
+                print(f"  [c] {sc.id}: ok={r['ok']} fab={r['fabricated']} calls={r['usage']['calls']}")
+
     out = Path("agent-sessions/_eval") / "skills_eval_results.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(rows, indent=2))
