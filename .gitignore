@@ -35,3 +35,5 @@ venv/
 
 # Local DB recovery backups (not source)
 _archive/agentdb-legacy/
+# Archived eval/debug session artifacts (not source)
+_archive/di_sessions-legacy/
