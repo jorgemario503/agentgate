@@ -5,18 +5,22 @@ human_zone_prefixes:
   - "config/human/"
   - "prompts/locked/"
 
-# Shared scope for every bot identity in this deployment.
+# All bots are registered by default.
 #
-# agent_id lookup is an exact match — a named Telegram identity
-# (--bot <name>) requires its own entry here, e.g.:
-#   telegram_assistant_<name>: *bot_scope
-# Without an entry the agent_id gets every memory write denied by
-# default_policy with no warning except a runtime PermissionDenied error.
-.bot_scope: &bot_scope
+# `default_agent_scope` is granted to ANY bot identity that is not listed under
+# `agents:` below. This means a new `--bot <name>` identity is authorized to
+# write/read its memory without a manual per-bot entry — the machine merely has
+# to be running the bot. To DENY a specific bot, add an explicit entry under
+# `agents:` with `disabled: true` (see the commented template at the bottom).
+#
+# Remove `default_agent_scope` entirely to fall back to strict deny-by-default
+# (every identity must be listed explicitly to write anything).
+default_agent_scope:
   can_write:
     - "memory/working/"
     - "memory/episodic/"
     - "memory/org/"
+    - "memory/compaction/"   # checkpoint + compaction summary written on session close
     - "config/agent/learned_prefs/"
   cannot_write:
     - "config/human/"
@@ -26,11 +30,25 @@ human_zone_prefixes:
     - "memory/episodic/"
     - "memory/long_term/"
     - "memory/org/"
+    - "memory/compaction/"   # retrieve prior compaction summaries/checkpoints
 
 agents:
-  slack_assistant: *bot_scope
-  telegram_assistant: *bot_scope
-  whatsapp_assistant: *bot_scope
-  # Add named Telegram identities below, one entry per --bot <name>:
-  # telegram_assistant_personal: *bot_scope
-  # telegram_assistant_work: *bot_scope
+  # No entries are required — every bot is registered via default_agent_scope.
+  #
+  # To explicitly DISABLE a bot (deny all its memory writes/reads), uncomment
+  # and add an entry per identity:
+  #
+  # slack_assistant:
+  #   disabled: true
+  # telegram_assistant_work:
+  #   disabled: true
+  #
+  # An explicit entry may also override the default scope for one bot, e.g.:
+  #
+  # telegram_assistant_personal:
+  #   can_write:
+  #     - "memory/working/"
+  #     - "memory/episodic/"
+  #   can_read:
+  #     - "memory/working/"
+  #     - "memory/episodic/"

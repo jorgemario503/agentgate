@@ -9,7 +9,8 @@ class FakeMiddleware:
     def __init__(self):
         self.ended = []
 
-    async def end_session(self, session_id, jsonl_path):
+    async def end_session(self, session_id, jsonl_path, summary=None,
+                          run_consolidation=False, llm_fn=None):
         self.ended.append((session_id, jsonl_path))
 
 

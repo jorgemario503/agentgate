@@ -86,3 +86,62 @@ class TestInitAgentDBFor(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestBuildConsolidationLlmFn(unittest.TestCase):
+    """build_consolidation_llm_fn returns None unless enabled + model configured."""
+
+    def _fn(self, environ):
+        """Set env, reload config+agentdb, build fn, restore env, return result."""
+        import importlib
+        import os
+        saved = {k: os.environ.get(k) for k in environ}
+        os.environ.update(environ)
+        try:
+            import core.config as _c
+            importlib.reload(_c)
+            import core.agentdb as _a
+            importlib.reload(_a)
+            return _a.build_consolidation_llm_fn(environ.get("__provider__", "deepinfra"))
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            # Reload config back to the ambient environment so later tests are clean.
+            import core.config as _c2
+            importlib.reload(_c2)
+
+    def test_disabled_returns_none(self):
+        fn = self._fn({"AGENTDB_CONSOLIDATION_ENABLED": "false",
+                       "DEEPINFRA_CONSOLIDATION_MODEL": "m", "DEEPINFRA_API_KEY": "x"})
+        self.assertIsNone(fn)
+
+    def test_enabled_but_no_model_returns_none(self):
+        fn = self._fn({"AGENTDB_CONSOLIDATION_ENABLED": "true",
+                       "DEEPINFRA_CONSOLIDATION_MODEL": "",
+                       "CONSOLIDATION_MODEL": "", "DEEPINFRA_API_KEY": "x"})
+        self.assertIsNone(fn)
+
+    def test_enabled_with_model_returns_callable(self):
+        # With enabled + a model, the result is a callable ONLY if the agentdb
+        # package ships build_llm_fn (the high-level helper lives in agentdb).
+        # Until a release includes it, the feature is dormant -> None.
+        try:
+            import agentdb.providers.consolidation  # noqa: F401
+            helper_present = True
+        except ImportError:
+            helper_present = False
+        fn = self._fn({"AGENTDB_CONSOLIDATION_ENABLED": "true",
+                       "DEEPINFRA_CONSOLIDATION_MODEL": "small",
+                       "DEEPINFRA_API_KEY": "x",
+                       "DEEPINFRA_BASE_URL": "https://example/v1"})
+        if helper_present:
+            self.assertTrue(callable(fn))
+        else:
+            self.assertIsNone(fn)
+
+    def test_unknown_provider_returns_none(self):
+        fn = self._fn({"AGENTDB_CONSOLIDATION_ENABLED": "true",
+                       "CONSOLIDATION_MODEL": "x", "__provider__": "claude"})
+        self.assertIsNone(fn)

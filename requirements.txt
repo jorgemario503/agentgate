@@ -24,7 +24,10 @@ openai>=1.0.0,<3.0.0
 # AgentDB governed memory — required (enabled by default).
 # Distribution name is `agentdatabase`; the import name remains `agentdb`.
 # 0.5.0 is memory-only: skill management APIs were removed from AgentDB core.
-agentdatabase>=0.5.0
+# 0.7.0 adds: default_agent_scope (permissions), build_llm_fn (consolidation
+# synthesis), profile.consolidation, capture.track_directories, working_dirs on
+# checkpoint/summary/finalize, and the auto-consolidation agent_id fix.
+agentdatabase>=0.7.0
 
 # Fireworks runner uses the openai package above — no vendor SDK required.
 

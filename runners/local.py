@@ -924,7 +924,12 @@ class LocalRunner:
             if ws_path:
                 jsonl_path = str(Path(ws_path) / "session_summary.jsonl")
                 try:
-                    await self._agentdb_middleware.end_session(thread_id, jsonl_path)
+                    from core.agentdb import build_consolidation_llm_fn
+                    llm_fn = build_consolidation_llm_fn(self.name)
+                    await self._agentdb_middleware.end_session(
+                        thread_id, jsonl_path,
+                        run_consolidation=llm_fn is not None, llm_fn=llm_fn,
+                    )
                 except Exception as e:
                     print(f"[agentdb] end_session error: {e}")
         self._turn_counters.pop(thread_id, None)
