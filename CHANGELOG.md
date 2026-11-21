@@ -4,7 +4,7 @@ All notable changes to AgentGate are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versions follow the
 project's release practice.
 
-## [Unreleased]
+## [0.1.0] — 2026-11-20
 
 ### Added
 - **Open-model Agent Skills (opt-in, OFF by default).** On-demand, standards-
