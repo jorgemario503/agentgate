@@ -17,6 +17,7 @@ human_zone_prefixes:
     - "memory/working/"
     - "memory/episodic/"
     - "memory/org/"
+    - "memory/compaction/"   # checkpoint + compaction summary written on session close
     - "config/agent/learned_prefs/"
   cannot_write:
     - "config/human/"
@@ -26,6 +27,7 @@ human_zone_prefixes:
     - "memory/episodic/"
     - "memory/long_term/"
     - "memory/org/"
+    - "memory/compaction/"   # retrieve prior compaction summaries/checkpoints
 
 agents:
   slack_assistant: *bot_scope

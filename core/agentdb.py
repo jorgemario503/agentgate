@@ -59,8 +59,6 @@ def init_agentdb_for(runner: Any, platform: Any, *, config: Any) -> None:
         db = AgentDB(
             memory_dir=config.AGENTDB_MEMORY_DIR,
             permissions_path=perms,
-            tracking_directories=["agent-sessions"],
-            tracking_root=".",
         )
     except Exception as e:  # bad config, unwritable dir, corrupt store, ...
         raise AgentDBInitError(
