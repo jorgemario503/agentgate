@@ -434,7 +434,7 @@ AGENTGATE_SKILLS_SELECTION_MODE=model
 The model decides when a skill is relevant and calls `skill_read`; "no skill" is a
 valid choice. In controlled evaluation this roughly doubled task success on
 specialized workflows while cutting cost per successful task. (Results are
-workload- and model-specific — see `docs/spec/skills-validation/`.)
+workload- and model-specific.)
 
 ### Explicit invocation (Mode C — `//skill-name`)
 
@@ -510,6 +510,50 @@ AGENTGATE_SKILLS_DIR=skills
 AGENTGATE_SKILLS_MANIFEST_TOKENS=600
 AGENTGATE_SKILLS_SELECTION_MODE=model
 ```
+
+Authoring, activation modes, security model, multi-turn behavior, testing and
+the evaluation harness: [docs/skills.md](docs/skills.md).
+
+---
+
+## Context efficiency (tool-result compression — opt-in, OFF by default)
+
+Open-model runners (`local`, `fireworks`, `deepinfra`) re-send the full
+conversation each turn, so bulky tool output (long logs, large JSON, minified
+assets) costs tokens every turn. AgentGate can **compress a tool result before
+the model sees it**, keep the exact original on disk, and let the model retrieve
+it on demand through the `tool_result_read` tool.
+
+Compression is **targeted and conservative**: repetitive log lines are collapsed
+(keeping every error/fatal/traceback/exit line and its context), large JSON
+becomes an annotated summary, and dense minified/base64 lines keep head+tail.
+Source code, diffs and tracebacks are treated conservatively, and **system,
+user and assistant messages are never touched**. It is **not redaction** —
+secrets are not scrubbed.
+
+```env
+AGENTGATE_TOOL_COMPRESSION_ENABLED=true    # master switch (default false)
+AGENTGATE_TOOL_COMPRESSION_MIN_CHARS=4000  # only results >= this are considered
+AGENTGATE_TOOL_ARTIFACT_DIR=               # blank -> <session-base>/_artifacts
+```
+
+Two related opt-in features sit alongside it: **cross-turn deduplication**
+(`AGENTGATE_CROSS_TURN_DEDUP_ENABLED=true` — replace a verbatim repeat of an
+earlier tool result with a pointer) and a **repo map**
+(`AGENTGATE_REPO_MAP_ENABLED=true` — inject a small deterministic overview of the
+workspace at session start).
+
+With all flags off (the default), outbound requests are byte-for-byte unchanged.
+
+Safety properties: fail-open (a compression error returns the original), the
+original is always retrievable, retrieval is authorized per session **and**
+workspace, and a tool message is transformed once so the provider cache prefix
+stays stable.
+
+Full guide — transforms, worked example, retrieval, dedup, repo map, tests and
+measurement: [docs/context-efficiency.md](docs/context-efficiency.md). For the
+opt-in live model probes and how to run them safely, see
+[docs/live-tests.md](docs/live-tests.md).
 
 ---
 

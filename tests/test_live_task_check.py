@@ -59,8 +59,11 @@ class TestTokenBudgetGuard(unittest.TestCase):
 class TestLiveGate(unittest.TestCase):
     def test_disabled_by_default(self):
         # With the flag unset, the run refuses (the live test below turns it on).
-        if os.environ.get("AGENTGATE_LIVE_TESTS"):
-            self.skipTest("live flag set in env; gate test not applicable")
+        # Use live_enabled() rather than truthiness of the raw env value: "0"
+        # is a truthy string, so os.environ.get(...) alone would skip the test
+        # even though the flag is logically off (e.g. .env sets =0).
+        if live_enabled():
+            self.skipTest("live flag enabled in env; gate test not applicable")
         self.assertFalse(live_enabled())
         with self.assertRaises(skip_reason_error):
             run_task_correctness()

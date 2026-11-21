@@ -16,8 +16,7 @@ list. Two tags matter and map directly onto a ReasoningStyle:
     reasoning (alone)  reasoning-capable but no depth parameter to send
                        -> style "model_variant"
 
-Anything else, or a model with neither tag, is not registered. See
-docs/reasoning-registry-source-of-truth.md for the reasoning behind this.
+Anything else, or a model with neither tag, is not registered.
 
 Why a tool and not a live lookup
 --------------------------------

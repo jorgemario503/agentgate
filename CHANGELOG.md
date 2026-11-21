@@ -27,5 +27,4 @@ project's release practice.
 ### Notes
 - Disabled by default (`AGENTGATE_SKILLS_ENABLED=false`); with skills off, outbound
   requests are unchanged. Controlled evaluation showed a large task-success gain on
-  specialized workflows at lower cost per successful task (single model; see
-  `docs/spec/skills-validation/`).
+  specialized workflows at lower cost per successful task (single model).

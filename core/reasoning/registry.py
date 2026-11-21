@@ -61,7 +61,7 @@ REGISTRY: dict[str, list[tuple[str, ModelReasoning]]] = {
         # DeepSeek V3/V4 are covered by the generated fragment (registry_generated.py),
         # which records the catalog's own tags: V3.1 carries reasoning_effort, V4.x
         # carries reasoning only. Kept out of the hand list so the catalog stays the
-        # single source of truth for these (docs/reasoning-registry-source-of-truth.md).
+        # single source of truth for these.
         # gpt-oss supports reasoning_effort low|medium|high.
         ("*gpt-oss*", ModelReasoning("reasoning_effort")),
         ("*kimi-k2*thinking*", ModelReasoning("reasoning_effort")),
@@ -74,8 +74,7 @@ REGISTRY: dict[str, list[tuple[str, ModelReasoning]]] = {
         # DeepInfra), so these are matched by family name. Every Fireworks *chat*
         # model we probed accepts the top-level reasoning_effort parameter
         # ("low"|"medium"|"high") and returns reasoning_content, per
-        # https://fireworks.ai/docs/guides/reasoning -- see
-        # docs/reasoning-registry-source-of-truth.md.
+        # https://fireworks.ai/docs/guides/reasoning.
         # A non-reasoning model (e.g. an embedding model) rejects it with
         # "non-reasoning model does not support reasoning_effort", which
         # looks_like_rejection() recognises, so it disables cleanly.
