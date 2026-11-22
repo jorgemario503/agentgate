@@ -178,8 +178,34 @@ def snapshot_worktree(
     if path.exists():
         raise WorktreeError(f"snapshot already exists at {path}")
 
-    _run_git(["worktree", "add", "--detach", str(path), candidate_commit], repo_root)
-    _make_read_only(path)
+    # Register BEFORE creating, exactly as worktrees do: a crash mid-create then leaves a
+    # detectable row instead of an untracked directory that cleanup can never find.
+    resource_id = f"SN-{uuid.uuid4().hex[:12]}"
+    existing = registry.list_snapshots()
+    for snap in existing:
+        if (snap.workflow_id, snap.spec_id, snap.attempt_id) == (
+                workflow_id, spec_id, attempt_id) and snap.status != "cleaned":
+            raise WorktreeError(
+                f"a snapshot for attempt {attempt_id!r} already exists ({snap.resource_id})"
+            )
+    registry.register_snapshot(
+        resource_id=resource_id,
+        repository_id="repo-001",
+        repo_root=str(repo_root),
+        workflow_id=workflow_id,
+        spec_id=spec_id,
+        attempt_id=attempt_id,
+        candidate_commit=candidate_commit,
+        snapshot_path=str(path),
+    )
+
+    try:
+        _run_git(["worktree", "add", "--detach", str(path), candidate_commit], repo_root)
+        _make_read_only(path)
+        registry.mark_snapshot_active(resource_id)
+    except Exception:
+        # Leave the row in provisioning so reconciliation can find the partial artifact.
+        raise
     return path
 
 

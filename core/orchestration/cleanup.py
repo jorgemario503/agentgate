@@ -14,6 +14,7 @@ Repeating either phase is safe: an already-clean resource is a no-op, not an err
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -126,6 +127,53 @@ def _remove_worktree(registry: RepoRegistry, record: WorktreeRecord) -> None:
     # never prune arbitrary branches, preserve unintegrated work).
 
 
+def execute_snapshot_cleanup(
+    registry: RepoRegistry, resource_id: str
+) -> CleanupOutcome:
+    """Dispose of one review snapshot (ORCH-SNAP-004).
+
+    Snapshots are disposable by definition: they exist only so a reviewer can inspect an
+    immutable candidate. Unlike worktrees they hold no uncommitted work, so there is no
+    dirty check -- but they are still removed through git so the repo's worktree metadata
+    stays consistent.
+    """
+    snap = registry.get_snapshot(resource_id)
+    if snap is None:
+        return CleanupOutcome(resource_id, False, "unknown snapshot")
+    if snap.status == STATUS_CLEANED:
+        return CleanupOutcome(resource_id, True)          # idempotent
+
+    try:
+        path = Path(snap.snapshot_path)
+        repo_root = Path(snap.repo_root)
+        if path.exists():
+            _make_writable(path)                          # read-only files block removal
+            proc = _git(["worktree", "remove", "--force", str(path)], repo_root)
+            if proc.returncode != 0 and path.exists():
+                shutil.rmtree(path)
+            _git(["worktree", "prune"], repo_root)
+        registry.mark_snapshot_cleaned(resource_id)
+        return CleanupOutcome(resource_id, True)
+    except OSError as exc:
+        registry.mark_snapshot_failed(resource_id, str(exc))
+        return CleanupOutcome(resource_id, False, str(exc))
+
+
+def _make_writable(path: Path) -> None:
+    """Restore write bits so a read-only snapshot can be removed."""
+    for root, dirs, files in os.walk(path):
+        for name in dirs:
+            try:
+                os.chmod(os.path.join(root, name), 0o755)
+            except OSError:
+                pass
+        for name in files:
+            try:
+                os.chmod(os.path.join(root, name), 0o644)
+            except OSError:
+                pass
+
+
 def sweep(registry: RepoRegistry, *, allow_dirty: bool = False) -> list[CleanupOutcome]:
     """Attempt cleanup for everything in a pending/failed/active state.
 
@@ -136,6 +184,10 @@ def sweep(registry: RepoRegistry, *, allow_dirty: bool = False) -> list[CleanupO
         for rec in registry.list_by_status(status):
             outcomes.append(execute_cleanup(registry, rec.resource_id,
                                             allow_dirty=allow_dirty))
+    # Snapshots are disposable and must not accumulate (ORCH-SNAP-004 / D11).
+    for snap in registry.list_snapshots():
+        if snap.status != STATUS_CLEANED:
+            outcomes.append(execute_snapshot_cleanup(registry, snap.resource_id))
     return outcomes
 
 

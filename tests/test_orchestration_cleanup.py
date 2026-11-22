@@ -213,3 +213,73 @@ def test_cleanup_retains_branch_by_design(registry, repo, managed, head):
 
     branches = _git(["branch", "--list", branch], repo).stdout
     assert branch in branches, "branch retention is intentional; reclamation is a later task"
+
+
+# --------------------------------------------------------------------------
+# ORCH-SNAP-004: snapshots are disposable and must not accumulate.
+#
+# Regression: snapshots were originally created but never registered, so `sweep()`
+# could not see them and they survived cleanup forever. That is exactly the unbounded
+# resource leak D11 makes release-blocking.
+# --------------------------------------------------------------------------
+
+def test_snapshot_is_registered_before_creation(registry, repo, managed, head):
+    from core.orchestration.worktree import snapshot_worktree
+    snap_path = snapshot_worktree(
+        registry=registry, repo_root=repo, managed_root=managed,
+        candidate_commit=head, workflow_id="WF-001", spec_id="SPEC-001",
+    )
+    snaps = registry.list_snapshots()
+    assert len(snaps) == 1
+    assert snaps[0].snapshot_path == str(snap_path)
+    assert snaps[0].status == "active"
+
+
+def test_snapshot_cleanup_removes_directory(registry, repo, managed, head):
+    from core.orchestration.worktree import snapshot_worktree
+    from core.orchestration.cleanup import execute_snapshot_cleanup
+
+    path = snapshot_worktree(
+        registry=registry, repo_root=repo, managed_root=managed,
+        candidate_commit=head, workflow_id="WF-001", spec_id="SPEC-001",
+    )
+    rid = registry.list_snapshots()[0].resource_id
+    out = execute_snapshot_cleanup(registry, rid)
+    assert out.cleaned is True
+    assert not path.exists()
+    assert registry.get_snapshot(rid).status == STATUS_CLEANED
+
+
+def test_snapshot_cleanup_is_idempotent(registry, repo, managed, head):
+    from core.orchestration.worktree import snapshot_worktree
+    from core.orchestration.cleanup import execute_snapshot_cleanup
+
+    snapshot_worktree(registry=registry, repo_root=repo, managed_root=managed,
+                      candidate_commit=head, workflow_id="WF-001", spec_id="SPEC-001")
+    rid = registry.list_snapshots()[0].resource_id
+    execute_snapshot_cleanup(registry, rid)
+    assert execute_snapshot_cleanup(registry, rid).cleaned is True
+
+
+def test_sweep_cleans_snapshots_too(registry, repo, managed, head):
+    """REGRESSION: a snapshot must not survive a sweep."""
+    from core.orchestration.worktree import snapshot_worktree
+
+    wt = _provision(registry, repo, managed, head)
+    snap = snapshot_worktree(registry=registry, repo_root=repo, managed_root=managed,
+                             candidate_commit=head, workflow_id="WF-001", spec_id="SPEC-001")
+
+    sweep(registry)
+
+    assert not Path(wt.worktree_path).exists()
+    assert not snap.exists(), "snapshot leaked: registered but not swept"
+    assert registry.list_snapshots(status="active") == []
+
+
+def test_duplicate_snapshot_for_same_attempt_rejected(registry, repo, managed, head):
+    from core.orchestration.worktree import snapshot_worktree
+    snapshot_worktree(registry=registry, repo_root=repo, managed_root=managed,
+                      candidate_commit=head, workflow_id="WF-001", spec_id="SPEC-001")
+    with pytest.raises(Exception):
+        snapshot_worktree(registry=registry, repo_root=repo, managed_root=managed,
+                          candidate_commit=head, workflow_id="WF-001", spec_id="SPEC-001")
