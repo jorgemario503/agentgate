@@ -54,14 +54,16 @@ jobs:
           ref = os.environ.get("GITHUB_REF_NAME", "")
 
           # Mirror the same constant the package exposes, so the two cannot drift.
-          init = pathlib.Path("core/orchestration/__init__.py").read_text()
+          # The REAL package is core.handoff; core.orchestration is only a shim whose
+          # __version__ comes via re-export, so it has no literal assignment to read.
+          init = pathlib.Path("core/handoff/__init__.py").read_text()
           m = re.search(r'__version__\s*=\s*"([^"]+)"', init)
           if not m:
-              sys.exit("core/orchestration/__init__.py has no __version__")
+              sys.exit("core/handoff/__init__.py has no __version__")
           if m.group(1) != declared:
               sys.exit(
                   f"version mismatch: pyproject.toml says {declared}, "
-                  f"core/orchestration/__init__.py says {m.group(1)}"
+                  f"core/handoff/__init__.py says {m.group(1)}"
               )
 
           if ref.startswith("v"):
@@ -90,9 +92,15 @@ jobs:
           schemas = [n for n in names if "/schemas/" in n and n.endswith(".json")]
           if len(schemas) != 5:
               sys.exit(f"expected 5 schema files in the wheel, found {len(schemas)}: {schemas}")
-          for required in ("core/orchestration/__init__.py",):
-              if required not in names:
-                  sys.exit(f"wheel is missing {required}")
+          required = [
+              "core/handoff/__init__.py",
+              # 0.3.0 is the last release shipping the deprecated alias; assert it is
+              # present so a published consumer on the old import path keeps working.
+              "core/orchestration/__init__.py",
+          ]
+          for path in required:
+              if path not in names:
+                  sys.exit(f"wheel is missing {path}")
           print(f"wheel OK: {len(schemas)} schemas present")
           PY
 
