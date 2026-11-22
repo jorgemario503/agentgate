@@ -434,6 +434,9 @@ def test_orchestration_package_imports_no_runner_or_bot(relpath):
     for forbidden in ("from runners", "import runners",
                       "from bots", "import bots",
                       "from orchestrator", "import orchestrator",
+                      # The real package name (DEC-401). Both spellings are banned so a
+                      # rename in the other repo cannot silently slip past this guard.
+                      "import agentorchestrator", "from agentorchestrator",
                       "import agent_orchestrator", "from agent_orchestrator"):
         assert forbidden not in src, f"{relpath} imports {forbidden!r} (dependency inversion)"
 
