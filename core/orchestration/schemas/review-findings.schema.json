@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentgate/review-findings.schema.json",
+  "title": "Reviewer result",
+  "description": "Contract for a reviewer's machine-readable result. Encodes spec section 4.2. Missing or unsupported evidence is 'not-verified', never implicitly 'pass'.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "handoff_id",
+    "attempt_id",
+    "reviewed_commit",
+    "recommendation",
+    "acceptance_criteria",
+    "findings",
+    "open_questions",
+    "tests_performed",
+    "tests_not_performed",
+    "residual_risks",
+    "recommended_next_action"
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0" },
+    "handoff_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "attempt_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "reviewed_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "recommendation": {
+      "type": "string",
+      "enum": ["APPROVED", "APPROVED_WITH_NOTES", "CHANGES_REQUESTED", "HUMAN_DECISION_REQUIRED", "BLOCKED"]
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requirement_id", "status", "evidence"],
+        "properties": {
+          "requirement_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "status": {
+            "type": "string",
+            "enum": ["pass", "fail", "not-verified", "not-applicable"]
+          },
+          "evidence": { "type": "string", "minLength": 1, "maxLength": 4000 },
+          "note": { "type": "string", "maxLength": 2000 }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "severity", "summary", "impact", "remediation"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^F-[0-9]+$" },
+          "severity": { "type": "string", "enum": ["critical", "major", "minor", "suggestion"] },
+          "summary": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "requirement_ref": { "type": "string", "maxLength": 128 },
+          "evidence": { "type": "string", "maxLength": 4000 },
+          "impact": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "remediation": { "type": "string", "minLength": 1, "maxLength": 2000 }
+        }
+      }
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "question"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^Q-[0-9]+$" },
+          "question": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "options": { "type": "array", "items": { "type": "string" }, "maxItems": 20 },
+          "recommendation": { "type": "string", "maxLength": 2000 },
+          "requires_human_approval": { "type": "boolean" }
+        }
+      }
+    },
+    "tests_performed": { "type": "array", "items": { "type": "string", "maxLength": 1000 }, "maxItems": 200 },
+    "tests_not_performed": { "type": "array", "items": { "type": "string", "maxLength": 1000 }, "maxItems": 200 },
+    "residual_risks": { "type": "array", "items": { "type": "string", "maxLength": 2000 }, "maxItems": 100 },
+    "recommended_next_action": { "type": "string", "minLength": 1, "maxLength": 1000 }
+  }
+}
