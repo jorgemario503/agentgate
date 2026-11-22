@@ -1,0 +1,5 @@
+# Wheel content is governed by pyproject.toml. This file only affects the sdist, and
+# exists so a source distribution includes README and LICENSE alongside the code.
+include README.md
+include LICENSE
+include requirements.txt

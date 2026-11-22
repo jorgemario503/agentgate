@@ -20,7 +20,19 @@ from core.orchestration import (
     validate_review_findings,
 )
 
-SCHEMAS = Path(__file__).resolve().parents[1] / "core" / "orchestration" / "schemas"
+def _schemas_dir() -> Path:
+    """Locate the shipped schemas regardless of source-tree or installed layout.
+
+    A wheel install has no adjacent ``core/`` directory, so the old
+    ``parents[1] / "core" / ...`` path resolved to nothing and the drift test would
+    have silently had no schemas to check -- the one place vendoring can go wrong
+    (DEC-402/406). Resolve via the importable package instead.
+    """
+    import core.orchestration as _pkg
+    return Path(_pkg.__file__).resolve().parent / "schemas"
+
+
+SCHEMAS = _schemas_dir()
 
 SHA_A = "a" * 40
 SHA_B = "b" * 40
@@ -451,3 +463,77 @@ def test_dependency_guard_covers_every_module():
                      "submit.py", "validate.py"):
         assert expected in names, f"{expected} not covered by the dependency guard"
 
+
+
+# --------------------------------------------------------------------------
+# DEC-407 check 2: the published surface must be stable and complete.
+#
+# agentorchestrator depends on these names. A rename that is not mirrored in the
+# orchestrator's pin must fail here rather than at the other repo's runtime.
+# --------------------------------------------------------------------------
+
+def test_published_api_names_all_resolve():
+    import core.orchestration as pkg
+    missing = [n for n in pkg.PUBLISHED_API if not hasattr(pkg, n)]
+    assert not missing, f"PUBLISHED_API lists names that do not exist: {missing}"
+
+
+def test_published_api_is_the_documented_runner_surface():
+    """Lock the contract: adding/removing a published name is a deliberate act.
+
+    If this list changes, the orchestrator's pin must be bumped. Updating this test
+    without touching the boundary record means the contract changed silently.
+    """
+    import core.orchestration as pkg
+    assert set(pkg.PUBLISHED_API) == {
+        # wire contracts
+        "ROLES", "TRANSITIONS", "RECOMMENDATIONS", "SEVERITIES",
+        "ACCEPTANCE_STATUSES", "GATE_STATUSES",
+        "ValidationError", "require_valid", "check_path_contained",
+        "validate_handoff", "validate_review_findings",
+        "validate_gate_decision", "validate_decision_digest", "validate_gate_record",
+        # handoff request
+        "submit_handoff", "SubmitError",
+        # telemetry
+        "UsageRecord", "UsageSink", "normalize_usage", "safe_emit",
+    }
+
+
+def test_transitional_and_published_do_not_overlap():
+    import core.orchestration as pkg
+    assert not (set(pkg.PUBLISHED_API) & set(pkg.TRANSITIONAL))
+
+
+def test_all_exports_are_declared():
+    """__all__ must be exactly published + transitional, so nothing hides."""
+    import core.orchestration as pkg
+    assert set(pkg.__all__) == set(pkg.PUBLISHED_API) | set(pkg.TRANSITIONAL)
+
+
+# --------------------------------------------------------------------------
+# DEC-406: the handoff surface must stay installable into the orchestrator
+# without the bot stack.
+# --------------------------------------------------------------------------
+
+def test_handoff_surface_pulls_no_bot_stack():
+    """Importing the package must not require openai/slack/telegram/agentdb.
+
+    The wheel ships only `core` + `core.orchestration`, but `core` contains heavy
+    modules. This asserts the *import graph* of the published surface stays clean, which
+    is the property that actually matters -- file size is cosmetic, an import failure in
+    the orchestrator is not.
+    """
+    import subprocess
+    import sys
+    code = (
+        "import sys\n"
+        "before=set(sys.modules)\n"
+        "import core.orchestration\n"
+        "new=set(sys.modules)-before\n"
+        "bad=[m for m in new if any(k in m for k in "
+        "('agentdb','slack','telegram','openai','httpx','anthropic'))]\n"
+        "print('|'.join(sorted(bad)))\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == "", f"handoff surface pulled: {out.stdout.strip()}"

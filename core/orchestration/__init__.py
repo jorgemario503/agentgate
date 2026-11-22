@@ -1,38 +1,33 @@
-"""Orchestration concern package.
+"""Runner-side handoff contract (formerly ``core/orchestration``).
 
-Holds the machine-readable contracts shared between AgentGate and the sibling
-orchestrator application: versioned JSON schemas (``core/orchestration/schemas/``)
-and pure-Python validators (``core.orchestration.validate``).
+Scheduled for rename to ``core/handoff`` once the orchestrator-owned modules move to
+the **agentorchestrator** repository (DEC-404). This package is AgentGate's published
+surface for that repo, so changes here are API changes.
 
-This package deliberately contains **no** runtime orchestration behaviour yet:
-no container supervision, no gate store, no FSM. Those land in later milestones
-and in the sibling application. Keeping the contracts here means the schemas and
-their validators evolve together and neither imports from ``runners/`` or ``bots/``.
+What lives here, and why
+------------------------
+AgentGate is the **runner**; agentorchestrator owns the workflow. This package holds
+only what the runner legitimately needs:
 
-Why the contracts live in AgentGate rather than the orchestrator
-----------------------------------------------------------------
-AgentGate has two in-process consumers that exist whether or not orchestration is
-enabled:
+* **``validate`` + ``schemas/``** — the wire contracts. They stay in the runner because
+  AgentGate must validate a ``milestone_submit`` payload without importing the
+  orchestrator; moving them would invert the dependency (DEC-108 as revised).
+* **``submit``** — the ``milestone_submit`` tool. In-process, request-only, no decisions.
+* **``usage``** — provider telemetry normalisation, read from a response the runner
+  already holds.
 
-* ``milestone_submit`` (``core/tools/registry.py``) must validate a handoff payload
-  before it can request a transition.
-* The reviewer agent runs on an open-model runner here and must be able to produce a
-  valid ``review-findings.json``.
+Everything else in this package at the time of writing (``registry``, ``worktree``,
+``cleanup``, ``gate_store``, ``authz``) is **orchestrator state scheduled to move out**
+per the boundary decision record. Do not add orchestration logic here: it belongs in
+agentorchestrator.
 
-If the validators lived only in the sibling app, AgentGate would have to depend on
-the orchestrator, inverting the intended dependency (the coordinator drives AgentGate,
-not the reverse). So the orchestrator **imports** this package rather than redefining
-the wire format. Precedent: ``core/skills/catalog.py`` implements an external standard
-in-repo for the same reason.
-
-Of the five contracts, ``handoff`` and ``review-findings`` are genuinely shared;
-``gate-decision`` and ``decision-digest`` lean orchestrator; ``gate-record`` describes
-the durable GateStore and is the most likely one to relocate once the sibling app's
-boundaries are concrete. They are versioned together here so one drift guard covers
-all of them. (Decision log DEC-108 / DEC-109.)
-
-Layout follows ``core/skills/`` and ``core/tools/`` (group by concern, not by file
-type), so callers import from the package rather than a module path:
+Dependency rule
+---------------
+This package imports nothing from ``runners/``, ``bots/`` or ``agentorchestrator``. The
+dependency direction is agentorchestrator -> agentgate, never the reverse. Enforced by
+tests in ``tests/test_orchestration_contracts.py``. Of the three staying modules, only
+the standard library is used, so the wheel is installable into the orchestrator without
+the bot stack.
 
     from core.orchestration import validate_handoff, ValidationError
 """
@@ -49,6 +44,13 @@ from core.orchestration.gate_store import (
     GateStore,
     PolicyError,
     NON_WAIVABLE_GATE_TYPES,
+)
+from core.orchestration.submit import SubmitError, submit_handoff
+from core.orchestration.usage import (
+    UsageRecord,
+    UsageSink,
+    normalize_usage,
+    safe_emit,
 )
 from core.orchestration.registry import (
     RepoRegistry,
@@ -78,36 +80,32 @@ from core.orchestration.validate import (
     validate_review_findings,
 )
 
-__all__ = [
-    "AlreadyResolved",
-    "Gate",
-    "GateStore",
-    "NotAuthorized",
+#: Stable published surface for agentorchestrator (DEC-407 check 2).
+#: These names are what the orchestrator may rely on. Removing or renaming one is a
+#: breaking API change and must fail CI until the orchestrator's pin is bumped.
+PUBLISHED_API = (
+    # wire contracts
+    "ROLES", "TRANSITIONS", "RECOMMENDATIONS", "SEVERITIES",
+    "ACCEPTANCE_STATUSES", "GATE_STATUSES",
+    "ValidationError", "require_valid", "check_path_contained",
+    "validate_handoff", "validate_review_findings",
+    "validate_gate_decision", "validate_decision_digest", "validate_gate_record",
+    # runner-side handoff request
+    "submit_handoff", "SubmitError",
+    # provider telemetry
+    "UsageRecord", "UsageSink", "normalize_usage", "safe_emit",
+)
+
+#: Transitional: orchestrator state that is **scheduled to move out** to the
+#: agentorchestrator repo (see the boundary decision record). Exported so current tests
+#: and callers keep working, but nothing in agentgate should grow a dependency on it.
+TRANSITIONAL = (
+    "GateStore", "Gate", "AlreadyResolved", "PolicyError",
+    "NotAuthorized", "is_gate_approver", "require_gate_approver",
     "NON_WAIVABLE_GATE_TYPES",
-    "PolicyError",
-    "is_gate_approver",
-    "require_gate_approver",
-    "RepoRegistry",
-    "RegistryError",
-    "SnapshotRecord",
-    "WorktreeRecord",
-    "STATUS_ACTIVE",
-    "STATUS_CLEANED",
-    "STATUS_CLEANUP_FAILED",
-    "STATUS_CLEANUP_PENDING",
-    "STATUS_PROVISIONING",
-    "ACCEPTANCE_STATUSES",
-    "GATE_STATUSES",
-    "RECOMMENDATIONS",
-    "ROLES",
-    "SEVERITIES",
-    "TRANSITIONS",
-    "ValidationError",
-    "check_path_contained",
-    "require_valid",
-    "validate_decision_digest",
-    "validate_gate_decision",
-    "validate_gate_record",
-    "validate_handoff",
-    "validate_review_findings",
-]
+    "RepoRegistry", "RegistryError", "SnapshotRecord", "WorktreeRecord",
+    "STATUS_ACTIVE", "STATUS_CLEANED", "STATUS_CLEANUP_FAILED",
+    "STATUS_CLEANUP_PENDING", "STATUS_PROVISIONING",
+)
+
+__all__ = list(PUBLISHED_API) + list(TRANSITIONAL)
