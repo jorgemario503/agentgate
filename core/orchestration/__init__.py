@@ -57,17 +57,6 @@ from core.orchestration.usage import (
     normalize_usage,
     safe_emit,
 )
-from core.orchestration.registry import (
-    RepoRegistry,
-    RegistryError,
-    SnapshotRecord,
-    WorktreeRecord,
-    STATUS_ACTIVE,
-    STATUS_CLEANED,
-    STATUS_CLEANUP_FAILED,
-    STATUS_CLEANUP_PENDING,
-    STATUS_PROVISIONING,
-)
 from core.orchestration.validate import (
     ACCEPTANCE_STATUSES,
     GATE_STATUSES,
@@ -108,9 +97,6 @@ TRANSITIONAL = (
     "GateStore", "Gate", "AlreadyResolved", "PolicyError",
     "NotAuthorized", "is_gate_approver", "require_gate_approver",
     "NON_WAIVABLE_GATE_TYPES",
-    "RepoRegistry", "RegistryError", "SnapshotRecord", "WorktreeRecord",
-    "STATUS_ACTIVE", "STATUS_CLEANED", "STATUS_CLEANUP_FAILED",
-    "STATUS_CLEANUP_PENDING", "STATUS_PROVISIONING",
 )
 
 __all__ = list(PUBLISHED_API) + list(TRANSITIONAL)
