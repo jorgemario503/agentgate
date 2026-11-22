@@ -157,6 +157,16 @@ AGENTGATE_WORKFLOWS_ENABLED = _env_bool("AGENTGATE_WORKFLOWS_ENABLED")
 AGENTGATE_WORKFLOW_REGISTRY_DIR = os.environ.get(
     "AGENTGATE_WORKFLOW_REGISTRY_DIR", "agent-sessions/workflows"
 )
+# Managed root for per-workflow Git worktrees (DEC-201). Host-private and already
+# covered by the agent-sessions/ ignore rule, so managed trees never touch repo status.
+AGENTGATE_WORKSPACE_ROOT = os.environ.get(
+    "AGENTGATE_WORKSPACE_ROOT", "agent-sessions/workspaces"
+)
+# Durable cross-process registry (DEC-202). Same volume as the worktrees so
+# registration and rename operations stay atomic.
+AGENTGATE_ORCHESTRATION_DB = os.environ.get(
+    "AGENTGATE_ORCHESTRATION_DB", "agent-sessions/orchestration.db"
+)
 
 # -------------------------
 # SECURITY LAYER 1 — hard blocks on both user messages and generated Bash commands

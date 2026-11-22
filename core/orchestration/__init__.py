@@ -38,6 +38,16 @@ type), so callers import from the package rather than a module path:
 """
 from __future__ import annotations
 
+from core.orchestration.registry import (
+    RepoRegistry,
+    RegistryError,
+    WorktreeRecord,
+    STATUS_ACTIVE,
+    STATUS_CLEANED,
+    STATUS_CLEANUP_FAILED,
+    STATUS_CLEANUP_PENDING,
+    STATUS_PROVISIONING,
+)
 from core.orchestration.validate import (
     ACCEPTANCE_STATUSES,
     GATE_STATUSES,
@@ -56,6 +66,14 @@ from core.orchestration.validate import (
 )
 
 __all__ = [
+    "RepoRegistry",
+    "RegistryError",
+    "WorktreeRecord",
+    "STATUS_ACTIVE",
+    "STATUS_CLEANED",
+    "STATUS_CLEANUP_FAILED",
+    "STATUS_CLEANUP_PENDING",
+    "STATUS_PROVISIONING",
     "ACCEPTANCE_STATUSES",
     "GATE_STATUSES",
     "RECOMMENDATIONS",
