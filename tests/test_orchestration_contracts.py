@@ -415,14 +415,36 @@ def _module_source(relpath):
     return (Path(__file__).resolve().parents[1] / relpath).read_text()
 
 
-@pytest.mark.parametrize("relpath", [
-    "core/orchestration/__init__.py",
-    "core/orchestration/validate.py",
-])
+def _orchestration_modules():
+    """Every Python module in the orchestration package.
+
+    Globbed rather than hardcoded: the previous version listed two files by hand, so five
+    of the eight modules (gate_store, authz, registry, worktree, cleanup) were never
+    checked at all. A dependency guard that silently covers a fraction of the package is
+    worse than none, because it reads as enforced.
+    """
+    pkg = Path(__file__).resolve().parents[1] / "core" / "orchestration"
+    return sorted(str(p.relative_to(pkg.parents[1]))
+                  for p in pkg.rglob("*.py") if "__pycache__" not in str(p))
+
+
+@pytest.mark.parametrize("relpath", _orchestration_modules())
 def test_orchestration_package_imports_no_runner_or_bot(relpath):
     src = _module_source(relpath)
     for forbidden in ("from runners", "import runners",
                       "from bots", "import bots",
-                      "from orchestrator", "import orchestrator"):
+                      "from orchestrator", "import orchestrator",
+                      "import agent_orchestrator", "from agent_orchestrator"):
         assert forbidden not in src, f"{relpath} imports {forbidden!r} (dependency inversion)"
+
+
+def test_dependency_guard_covers_every_module():
+    """Meta-test: the guard must actually enumerate the whole package."""
+    modules = _orchestration_modules()
+    assert len(modules) >= 8, f"guard covers only {modules}"
+    names = {m.rsplit("/", 1)[-1] for m in modules}
+    for expected in ("gate_store.py", "authz.py", "registry.py",
+                     "worktree.py", "cleanup.py", "usage.py",
+                     "submit.py", "validate.py"):
+        assert expected in names, f"{expected} not covered by the dependency guard"
 
