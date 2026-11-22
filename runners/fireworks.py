@@ -21,6 +21,7 @@ from typing import Any, Awaitable, Callable, Optional
 from openai import AsyncOpenAI
 
 import core.approvals as approvals
+import core.config as _cfg
 from core.config import (
     ADDITIONAL_DIRS,
     BLOCKED_PATTERNS,
@@ -1037,6 +1038,10 @@ class FireworksRunner:
                 output_cap=_OUTPUT_CAP, bash_timeout=_BASH_TIMEOUT_SECONDS,
                 pipeline=_tool_pipeline,
                 skills_catalog=skills_ctx.catalog if skills_ctx.enabled else None,
+                workflows_enabled=_cfg.AGENTGATE_WORKFLOWS_ENABLED,
+                workflow_registry_dir=_cfg.AGENTGATE_WORKFLOW_REGISTRY_DIR,
+                source_role="implementer",
+                requested_by=f"agent:{self.name}",
             ),
             system_prompt=system_prompt,
             can_use_tool=_make_permission_callback(

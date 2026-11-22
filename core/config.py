@@ -142,6 +142,23 @@ AGENTGATE_SKILLS_SELECTION_MODE = os.environ.get(
 ).strip().lower()
 
 # -------------------------
+# WORKFLOW ORCHESTRATION (OFF by default)
+#
+# When disabled (default), the `milestone_submit` tool is NOT built and is
+# invisible to models: the registry is byte-for-byte what it was before
+# orchestration existed. When enabled, an implementer/reviewer agent may *request*
+# a transition; it never spawns an agent, approves a gate, or advances a workflow.
+# Approval remains a human/host operation.
+# See docs: handoff-orchestration-spec-reconciled.md.
+# -------------------------
+AGENTGATE_WORKFLOWS_ENABLED = _env_bool("AGENTGATE_WORKFLOWS_ENABLED")
+# Host-private directory where handoff requests are written. Deliberately NOT
+# under docs/spec/: that is project deliverable space, this is runtime state.
+AGENTGATE_WORKFLOW_REGISTRY_DIR = os.environ.get(
+    "AGENTGATE_WORKFLOW_REGISTRY_DIR", "agent-sessions/workflows"
+)
+
+# -------------------------
 # SECURITY LAYER 1 — hard blocks on both user messages and generated Bash commands
 # -------------------------
 BLOCKED_PATTERNS = [

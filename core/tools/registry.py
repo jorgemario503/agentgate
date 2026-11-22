@@ -166,6 +166,11 @@ def build_tools(
     bash_timeout: int,
     pipeline=None,
     skills_catalog=None,
+    workflows_enabled: bool = False,
+    workflow_registry_dir: str | None = None,
+    source_role: str = "implementer",
+    workflow_id: str = "WF-001",
+    requested_by: str = "agent",
 ) -> dict[str, Tool]:
     """Build the shared 8-tool registry (plus conditionals).
 
@@ -258,5 +263,52 @@ def build_tools(
             "List every available skill (name + description), including any not "
             "shown in the prompt.",
             {}, [], _skill_list,
+        )
+    if workflows_enabled:
+        # Request-only: records an intent, never spawns or approves. Gated so that
+        # the default (disabled) registry is byte-for-byte unchanged.
+        from pathlib import Path as _Path
+        from core.orchestration.submit import submit_handoff
+
+        def _milestone_submit(args: dict) -> str:
+            return submit_handoff(
+                args,
+                registry_dir=workflow_registry_dir or "agent-sessions/workflows",
+                repo_root=_Path(workspace_path),
+                source_role=source_role,
+                workflow_id=workflow_id,
+                requested_by=requested_by,
+            )
+
+        tools["milestone_submit"] = t(
+            "milestone_submit",
+            "Request an independent review of an immutable candidate commit. This "
+            "records a REQUEST only: it does not start an agent, approve anything, "
+            "or advance the workflow. A human must authorize the handoff.",
+            {
+                "milestone_id": {"type": "string"},
+                "candidate_commit": {"type": "string",
+                                     "description": "full 40-char git SHA"},
+                "base_commit": {"type": "string",
+                                "description": "full 40-char git SHA"},
+                "target_role": {"type": "string", "enum": ["reviewer"]},
+                "requested_action": {"type": "string",
+                                     "enum": ["review_milestone"]},
+                "idempotency_key": {"type": "string"},
+                "artifact_references": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "sha256": {"type": "string"},
+                        },
+                        "required": ["path", "sha256"],
+                    },
+                },
+            },
+            ["milestone_id", "candidate_commit", "base_commit",
+             "idempotency_key", "artifact_references"],
+            _milestone_submit,
         )
     return tools
