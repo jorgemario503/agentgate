@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentgate"
+version = "0.2.0"
+description = "Open-model agent runners with platform bots, plus the handoff contract consumed by agentorchestrator"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Operating System :: OS Independent",
+]
+
+# The handoff surface (core.handoff) is deliberately stdlib-only: it must be
+# installable into agentorchestrator without dragging in the bot stack. These are
+# the dependencies of the *runners and bots*, which an orchestrator deployment does
+# not need. Setuptools cannot express "extras for the app but not the library", so
+# they are declared here for a source install and kept out of the library path by
+# the fact that core.handoff imports none of them (asserted by tests).
+dependencies = [
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+# Everything needed to actually run AgentGate's bots and runners.
+full = [
+    "slack-bolt>=1.20",
+    "aiohttp>=3.9",
+    "python-telegram-bot>=21.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "claude-agent-sdk>=0.1.0",
+    "openai>=1.0.0,<3.0.0",
+    "agentdatabase>=0.7.0",
+]
+test = ["pytest>=9.0", "pytest-asyncio>=1.0"]
+
+[project.urls]
+Homepage = "https://github.com/jorgemario503/agentgate"
+
+[tool.setuptools]
+# Ship only what agentorchestrator consumes. `core` is included because
+# core.orchestration is a subpackage, but its heavy modules (agentdb, bots glue,
+# sessions, commands...) are pruned below: none of them are importable from the
+# handoff surface, and pulling the bot stack into the orchestrator defeats the
+# point of a separate package.
+packages = ["core", "core.orchestration"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["*.pyc", "__pycache__/*"]
+
+# NOTE on wheel contents: `core` ships as a whole package, so the wheel also contains
+# bot-stack modules (agentdb, commands, sessions...). That is dead weight, not a
+# coupling: importing core.orchestration pulls none of them, which is asserted by
+# tests/test_orchestration_contracts.py::test_handoff_surface_pulls_no_bot_stack.
+# Trimming them from the wheel needs per-module exclusion that setuptools does not
+# express cleanly; revisit only if wheel size becomes a real problem.
+
+[tool.setuptools.package-data]
+# The schema JSON is not loaded at runtime (validators are hand-written Python),
+# but the drift tests read it. Without shipping these, agentorchestrator cannot run
+# the drift check that makes vendoring safe (DEC-402 / DEC-406).
+"core.orchestration" = ["schemas/*.json"]
