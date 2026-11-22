@@ -38,6 +38,18 @@ type), so callers import from the package rather than a module path:
 """
 from __future__ import annotations
 
+from core.orchestration.authz import (
+    NotAuthorized,
+    is_gate_approver,
+    require_gate_approver,
+)
+from core.orchestration.gate_store import (
+    AlreadyResolved,
+    Gate,
+    GateStore,
+    PolicyError,
+    NON_WAIVABLE_GATE_TYPES,
+)
 from core.orchestration.registry import (
     RepoRegistry,
     RegistryError,
@@ -67,6 +79,14 @@ from core.orchestration.validate import (
 )
 
 __all__ = [
+    "AlreadyResolved",
+    "Gate",
+    "GateStore",
+    "NotAuthorized",
+    "NON_WAIVABLE_GATE_TYPES",
+    "PolicyError",
+    "is_gate_approver",
+    "require_gate_approver",
     "RepoRegistry",
     "RegistryError",
     "SnapshotRecord",
