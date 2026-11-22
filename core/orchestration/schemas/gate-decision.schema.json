@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentgate/gate-decision.schema.json",
+  "title": "Gate decision",
+  "description": "Contract for a gate record. Encodes spec section 4.3. A distinct document from the reviewer result: the reviewer recommends, the gate decides. decision_status may only be 'recorded' when a matching authorized decision exists.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "milestone_id",
+    "attempt_id",
+    "spec_version",
+    "candidate_commit",
+    "gate_type",
+    "decision_authority",
+    "decision_status",
+    "next_action"
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0" },
+    "milestone_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "attempt_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "spec_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "candidate_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "gate_type": {
+      "type": "string",
+      "enum": ["handoff_approval", "milestone_acceptance", "product_spec_change", "spec_finalization"]
+    },
+    "configured_policy": { "type": "string", "maxLength": 256 },
+    "decision_authority": {
+      "type": "string",
+      "enum": ["human", "policy"]
+    },
+    "decision_status": { "type": "string", "enum": ["pending", "recorded"] },
+    "outcome": {
+      "type": "string",
+      "enum": ["APPROVED", "APPROVED_WITH_NOTES", "CHANGES_REQUESTED", "HUMAN_DECISION_REQUIRED", "BLOCKED", "DENIED", "CANCELLED", "EXPIRED"]
+    },
+    "blocking_finding_ids": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^F-[0-9]+$" },
+      "maxItems": 500
+    },
+    "conditions": { "type": "array", "items": { "type": "string", "maxLength": 2000 }, "maxItems": 100 },
+    "next_action": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "decided_by": { "type": "string", "maxLength": 128 },
+    "decided_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$" },
+    "causation_event_id": { "type": "string", "maxLength": 128 },
+    "approval_event_id": { "type": "string", "maxLength": 128 }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "decision_status": { "const": "recorded" } }, "required": ["decision_status"] },
+      "then": {
+        "required": ["outcome", "decided_by", "decided_at"],
+        "properties": { "outcome": { "type": "string" } }
+      }
+    },
+    {
+      "if": { "properties": { "decision_status": { "const": "pending" } }, "required": ["decision_status"] },
+      "then": { "not": { "required": ["decided_by"] } }
+    }
+  ]
+}

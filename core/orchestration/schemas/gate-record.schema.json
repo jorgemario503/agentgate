@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentgate/gate-record.schema.json",
+  "title": "Durable gate record",
+  "description": "Contract for a persisted gate awaiting or holding a human decision. Encodes spec sections 5, 6 and 10. Includes escalation fields (D14) and approver scoping. Never mutated in place after resolution; a new record supersedes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "gate_id",
+    "workflow_id",
+    "milestone_id",
+    "attempt_id",
+    "transition",
+    "candidate_commit",
+    "status",
+    "requires_human_decision",
+    "approvers",
+    "requested_at",
+    "escalation_count"
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0" },
+    "gate_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "workflow_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "milestone_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "attempt_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "handoff_id": { "type": "string", "maxLength": 128 },
+    "transition": {
+      "type": "string",
+      "enum": ["implementer_to_reviewer", "reviewer_to_implementer_fix", "reviewer_to_security_reviewer"]
+    },
+    "candidate_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "approved", "denied", "expired", "cancelled"]
+    },
+    "requires_human_decision": { "type": "boolean" },
+    "approvers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "user_ids"],
+      "properties": {
+        "platform": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "user_ids": { "type": "array", "items": { "type": "string", "maxLength": 128 }, "maxItems": 100 }
+      },
+      "description": "Empty user_ids fails closed: the workflow cannot advance (spec section 7.1)."
+    },
+    "requested_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$" },
+    "resolved_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$" },
+    "resolved_by": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "user_id"],
+      "properties": {
+        "platform": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "user_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "channel_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "channel": { "type": "string", "maxLength": 128 },
+        "thread_ts": { "type": "string", "maxLength": 64 },
+        "message_ts": { "type": "string", "maxLength": 64 }
+      }
+    },
+    "escalation_count": { "type": "integer", "minimum": 0 },
+    "last_escalated_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$" },
+    "escalation_policy_seconds": { "type": "integer", "minimum": 1 }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "pending" } }, "required": ["status"] },
+      "then": { "not": { "required": ["resolved_by"] } }
+    },
+    {
+      "if": {
+        "properties": { "status": { "enum": ["approved", "denied"] } },
+        "required": ["status"]
+      },
+      "then": { "required": ["resolved_at", "resolved_by"] }
+    }
+  ]
+}

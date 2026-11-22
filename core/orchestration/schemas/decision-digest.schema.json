@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentgate/decision-digest.schema.json",
+  "title": "Decision digest",
+  "description": "Contract for the implementer-facing digest. Encodes spec section 4.4. Built deterministically by the coordinator from structured records only. Carries NO raw chat, NO agent reasoning, and no field in which free-form conversation could be smuggled. source_record_ids make it traceable.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "digest_schema_version",
+    "digest_id",
+    "milestone_id",
+    "attempt_id",
+    "source_record_ids",
+    "generated_at"
+  ],
+  "properties": {
+    "digest_schema_version": { "type": "string", "const": "1.0" },
+    "digest_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "workflow_id": { "type": "string", "maxLength": 128 },
+    "milestone_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "attempt_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "source_record_ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1, "maxLength": 128 },
+      "description": "Exact gate/review/decision record ids projected into this digest."
+    },
+    "generated_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$" },
+    "decisions": {
+      "type": "array",
+      "description": "Recorded human decisions. Free text may appear ONLY in decision_note, attributed and bounded.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["decision_id", "outcome", "decided_by"],
+        "properties": {
+          "decision_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "gate_id": { "type": "string", "maxLength": 128 },
+          "outcome": {
+            "type": "string",
+            "enum": ["APPROVED", "APPROVED_WITH_NOTES", "CHANGES_REQUESTED", "HUMAN_DECISION_REQUIRED", "BLOCKED", "DENIED", "CANCELLED", "EXPIRED"]
+          },
+          "decided_by": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "decided_at": { "type": "string", "maxLength": 64 },
+          "decision_note": { "type": "string", "maxLength": 2000 },
+          "conditions": { "type": "array", "items": { "type": "string", "maxLength": 2000 }, "maxItems": 100 }
+        }
+      }
+    },
+    "findings_to_address": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "severity", "summary", "remediation"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^F-[0-9]+$" },
+          "severity": { "type": "string", "enum": ["critical", "major", "minor", "suggestion"] },
+          "summary": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "remediation": { "type": "string", "minLength": 1, "maxLength": 2000 }
+        }
+      }
+    },
+    "approved_spec_versions": {
+      "type": "array",
+      "items": { "type": "string", "maxLength": 64 },
+      "maxItems": 50
+    },
+    "unanswered_question_ids": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^Q-[0-9]+$" },
+      "maxItems": 200
+    },
+    "non_authoritative_prose": {
+      "type": "string",
+      "maxLength": 4000,
+      "description": "Optional LLM-assisted prose generated ONLY from this structured digest. Never authoritative; always points back to source records."
+    }
+  }
+}
