@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from core.orchestration.submit import SubmitError, submit_handoff
+from core.handoff.submit import SubmitError, submit_handoff
 from core.tools.registry import build_tools
 
 SHA_A = "a" * 40
@@ -217,7 +217,7 @@ def test_registry_confined_to_its_directory(repo, registry):
 
 
 def test_safe_filename_rejects_path_separators():
-    from core.orchestration.submit import _safe_filename
+    from core.handoff.submit import _safe_filename
     for bad in ("a/b", "../x", "a\\b", "", "x" * 200):
         with pytest.raises(SubmitError):
             _safe_filename(bad)

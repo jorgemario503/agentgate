@@ -13,7 +13,7 @@ import logging
 
 import pytest
 
-from core.orchestration.usage import (
+from core.handoff.usage import (
     UsageRecord,
     normalize_usage,
     safe_emit,

@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 # Distribution name on PyPI. NOT the import name: consumers still write
-# `from core.orchestration import ...` because the top-level package is `core`.
+# `from core.handoff import ...` because the top-level package is `core`.
 # "agentgate" is taken on PyPI by an unrelated project (bestagents/omniagents),
 # so the distribution is published under its own name (DEC-401 follow-up).
 name = "agentgaterunner"
-version = "0.2.0"
+version = "0.3.0"
 description = "Open-model agent runners with platform bots, plus the handoff contract consumed by agentorchestrator"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -50,18 +50,19 @@ Homepage = "https://github.com/jorgemario503/agentgate"
 
 [tool.setuptools]
 # Ship only what agentorchestrator consumes. `core` is included because
-# core.orchestration is a subpackage, but its heavy modules (agentdb, bots glue,
+# core.handoff is a subpackage, but its heavy modules (agentdb, bots glue,
 # sessions, commands...) are pruned below: none of them are importable from the
 # handoff surface, and pulling the bot stack into the orchestrator defeats the
 # point of a separate package.
-packages = ["core", "core.orchestration"]
+# core.orchestration is kept ONLY as a deprecated alias (removed in 0.4.0).
+packages = ["core", "core.handoff", "core.orchestration"]
 
 [tool.setuptools.exclude-package-data]
 "*" = ["*.pyc", "__pycache__/*"]
 
 # NOTE on wheel contents: `core` ships as a whole package, so the wheel also contains
 # bot-stack modules (agentdb, commands, sessions...). That is dead weight, not a
-# coupling: importing core.orchestration pulls none of them, which is asserted by
+# coupling: importing core.handoff pulls none of them, which is asserted by
 # tests/test_orchestration_contracts.py::test_handoff_surface_pulls_no_bot_stack.
 # Trimming them from the wheel needs per-module exclusion that setuptools does not
 # express cleanly; revisit only if wheel size becomes a real problem.
@@ -70,4 +71,4 @@ packages = ["core", "core.orchestration"]
 # The schema JSON is not loaded at runtime (validators are hand-written Python),
 # but the drift tests read it. Without shipping these, agentorchestrator cannot run
 # the drift check that makes vendoring safe (DEC-402 / DEC-406).
-"core.orchestration" = ["schemas/*.json"]
+"core.handoff" = ["schemas/*.json"]

@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from core.orchestration.validate import validate_handoff
+from core.handoff.validate import validate_handoff
 
 #: Filename used inside the registry dir for a persisted request.
 _SUBMIT_SUFFIX = ".handoff.json"

@@ -268,7 +268,7 @@ def build_tools(
         # Request-only: records an intent, never spawns or approves. Gated so that
         # the default (disabled) registry is byte-for-byte unchanged.
         from pathlib import Path as _Path
-        from core.orchestration.submit import submit_handoff
+        from core.handoff.submit import submit_handoff
 
         def _milestone_submit(args: dict) -> str:
             return submit_handoff(
