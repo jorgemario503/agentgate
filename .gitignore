@@ -33,7 +33,7 @@ venv/
 .vscode/
 .idea/
 
-# Local DB recovery backups (not source)
-_archive/agentdb-legacy/
-# Archived eval/debug session artifacts (not source)
-_archive/di_sessions-legacy/
+# Archive — local backups / stale artifacts (not source).
+# Ignore the whole tree; keep the one intentionally-archived example.
+_archive/
+!_archive/env.example.obsolete
