@@ -403,3 +403,26 @@ def test_schema_matches_validator_contract(filename, required, allowed):
     assert set(doc["properties"]) == set(allowed), (
         f"{filename} properties drifted from the validator"
     )
+
+
+# --------------------------------------------------------------------------
+# Placement guard (DEC-108): the contracts package must stay dependency-free.
+# If it ever imports from runners/, bots/ or a sibling orchestrator, the
+# dependency direction inverts and AgentGate would depend on the coordinator.
+# --------------------------------------------------------------------------
+
+def _module_source(relpath):
+    return (Path(__file__).resolve().parents[1] / relpath).read_text()
+
+
+@pytest.mark.parametrize("relpath", [
+    "core/orchestration/__init__.py",
+    "core/orchestration/validate.py",
+])
+def test_orchestration_package_imports_no_runner_or_bot(relpath):
+    src = _module_source(relpath)
+    for forbidden in ("from runners", "import runners",
+                      "from bots", "import bots",
+                      "from orchestrator", "import orchestrator"):
+        assert forbidden not in src, f"{relpath} imports {forbidden!r} (dependency inversion)"
+
