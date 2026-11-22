@@ -167,6 +167,13 @@ AGENTGATE_WORKSPACE_ROOT = os.environ.get(
 AGENTGATE_ORCHESTRATION_DB = os.environ.get(
     "AGENTGATE_ORCHESTRATION_DB", "agent-sessions/orchestration.db"
 )
+# Durable gate store (DEC-301): separate DB from the workspace registry -- gates and
+# worktrees have different lifecycles, and mixing them would make the registry a
+# general-purpose store. Gate POLICY (who approves, whether a human is required) is
+# orchestrator configuration and is deliberately NOT read here.
+AGENTGATE_GATE_DB = os.environ.get(
+    "AGENTGATE_GATE_DB", "agent-sessions/gates.db"
+)
 
 # -------------------------
 # SECURITY LAYER 1 — hard blocks on both user messages and generated Bash commands
