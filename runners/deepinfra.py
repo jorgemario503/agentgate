@@ -282,9 +282,11 @@ class DeepInfraAgentClient:
         tool_pipeline=None,
         skills_context=None,
         skill_session=None,
+        usage_sink=None,
     ):
         self.model = model
         self.context_window = context_window
+        self._usage_sink = usage_sink
         self.temperature = TEMPERATURE
         self.max_tokens = MAX_TOKENS
         settings = settings_for("deepinfra")
@@ -521,6 +523,7 @@ class DeepInfraAgentClient:
             raise
         data = completion.model_dump(exclude_none=True)
         self._record_reasoning(data)
+        self._emit_usage(data)
         return data
 
     def _record_reasoning(self, data: dict) -> None:
@@ -537,6 +540,24 @@ class DeepInfraAgentClient:
         )
         if text:
             state.last_reasoning = text
+
+    def _emit_usage(self, data: dict) -> None:
+        """Report this response's token usage to the optional sink (best-effort).
+
+        No-ops when no sink is configured, so default behaviour is unchanged.
+        ``safe_emit`` swallows sink errors; telemetry never costs a turn.
+        """
+        if self._usage_sink is None:
+            return
+        from core.orchestration.usage import normalize_usage, safe_emit
+        record = normalize_usage(
+            data,
+            runner="deepinfra",
+            model_id=self.model,
+            session_key=self.session_id,
+        )
+        safe_emit(self._usage_sink, record)
+
     @property
 
     def _max_tool_result_chars(self) -> int:
@@ -798,6 +819,16 @@ class DeepInfraRunner:
         self._agent_id: str = "agent"
         self._turn_counters: dict[str, int] = {}
         self._session_workspace_paths: dict[str, str] = {}
+        # Optional telemetry sink; None keeps default behaviour byte-identical.
+        self._usage_sink = None
+
+    def set_usage_sink(self, sink) -> None:
+        """Install (or clear) a callable receiving one UsageRecord per response.
+
+        Passing ``None`` restores default behaviour. Existing clients keep the sink
+        they were built with; new clients pick up the current value.
+        """
+        self._usage_sink = sink
 
     async def set_model(self, value: str | None) -> ModelSpec:
         self._model = resolve_model(value)
@@ -938,6 +969,7 @@ class DeepInfraRunner:
             tool_pipeline=_tool_pipeline,
             skills_context=skills_ctx if skills_ctx.enabled else None,
             skill_session=skill_session,
+            usage_sink=self._usage_sink,
         )
         await client.connect()
         self._clients[thread_id] = client

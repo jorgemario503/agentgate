@@ -309,8 +309,10 @@ class FireworksAgentClient:
         tool_pipeline=None,
         skills_context=None,
         skill_session=None,
+        usage_sink=None,
     ):
         self.model = model
+        self._usage_sink = usage_sink
         self.context_window = context_window
         api_key = api_key or settings_for("fireworks").api_key
         if not api_key:
@@ -526,6 +528,22 @@ class FireworksAgentClient:
         if text:
             state.last_reasoning = text
 
+    def _emit_usage(self, data: dict) -> None:
+        """Report this response's token usage to the optional sink (best-effort).
+
+        No-ops when no sink is configured, so default behaviour is unchanged.
+        """
+        if self._usage_sink is None:
+            return
+        from core.orchestration.usage import normalize_usage, safe_emit
+        record = normalize_usage(
+            data,
+            runner="fireworks",
+            model_id=self.model,
+            session_key=self.session_id,
+        )
+        safe_emit(self._usage_sink, record)
+
     async def _call_fireworks(self) -> dict:
         await self._maybe_compact_history()
         self._trim_history()
@@ -561,6 +579,7 @@ class FireworksAgentClient:
             raise
         data = completion.to_dict()
         self._record_reasoning(data)
+        self._emit_usage(data)
         return data
 
     @property
@@ -853,6 +872,12 @@ class FireworksRunner:
         self._agent_id: str = "agent"
         self._turn_counters: dict[str, int] = {}
         self._session_workspace_paths: dict[str, str] = {}
+        # Optional telemetry sink; None keeps default behaviour byte-identical.
+        self._usage_sink = None
+
+    def set_usage_sink(self, sink) -> None:
+        """Install (or clear) a UsageRecord sink. None restores default behaviour."""
+        self._usage_sink = sink
 
     async def set_model(self, value: str | None) -> ModelSpec:
         """Resolve model and optionally look up its context window from Fireworks."""
@@ -1023,6 +1048,7 @@ class FireworksRunner:
             tool_pipeline=_tool_pipeline,
             skills_context=skills_ctx if skills_ctx.enabled else None,
             skill_session=skill_session,
+            usage_sink=self._usage_sink,
         )
         await client.connect()
         self._clients[thread_id] = client
