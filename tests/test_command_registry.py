@@ -265,3 +265,39 @@ def test_mention_prefixed_text_is_not_a_command(text):
     It must fall through to the agent turn rather than being parsed here.
     """
     assert commands.parse_command(text) is None
+
+
+# --------------------------------------------------------------------------
+# Bot-use vs. admin authorization — the two checks the gate layer is contrasted against.
+#
+# These moved here from the orchestration authz tests: agentorchestrator owns gate
+# authorization, but *these* two functions belong to the runner. When the gate tests left,
+# their contrast assertions went with them, and nothing else covered these — so the
+# coverage is restored here rather than lost with the migration.
+# --------------------------------------------------------------------------
+
+class _Platform:
+    def __init__(self, allowed=(), admins=()):
+        self.allowed_user_ids = frozenset(allowed)
+        self.admin_user_ids = frozenset(admins)
+
+
+def test_is_allowed_fails_open_on_empty_allowlist():
+    """An empty allowlist admits everyone — the opposite of gate authorization."""
+    assert commands.is_allowed(_Platform(), "anyone") is True
+
+
+def test_is_allowed_checks_membership_when_configured():
+    p = _Platform(allowed={"U-1"})
+    assert commands.is_allowed(p, "U-1") is True
+    assert commands.is_allowed(p, "U-2") is False
+
+
+def test_is_admin_fails_closed_on_empty_list():
+    assert commands.is_admin(_Platform(), "anyone") is False
+
+
+def test_is_admin_checks_membership_when_configured():
+    p = _Platform(admins={"U-ADMIN"})
+    assert commands.is_admin(p, "U-ADMIN") is True
+    assert commands.is_admin(p, "U-OTHER") is False

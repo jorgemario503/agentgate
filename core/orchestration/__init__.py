@@ -38,18 +38,6 @@ from __future__ import annotations
 #: A test asserts this equals pyproject.toml's version.
 __version__ = "0.2.0"
 
-from core.orchestration.authz import (
-    NotAuthorized,
-    is_gate_approver,
-    require_gate_approver,
-)
-from core.orchestration.gate_store import (
-    AlreadyResolved,
-    Gate,
-    GateStore,
-    PolicyError,
-    NON_WAIVABLE_GATE_TYPES,
-)
 from core.orchestration.submit import SubmitError, submit_handoff
 from core.orchestration.usage import (
     UsageRecord,
@@ -90,13 +78,9 @@ PUBLISHED_API = (
     "UsageRecord", "UsageSink", "normalize_usage", "safe_emit",
 )
 
-#: Transitional: orchestrator state that is **scheduled to move out** to the
-#: agentorchestrator repo (see the boundary decision record). Exported so current tests
-#: and callers keep working, but nothing in agentgate should grow a dependency on it.
-TRANSITIONAL = (
-    "GateStore", "Gate", "AlreadyResolved", "PolicyError",
-    "NotAuthorized", "is_gate_approver", "require_gate_approver",
-    "NON_WAIVABLE_GATE_TYPES",
-)
+#: Transitional modules: **none remain**. Workspace lifecycle and the gate store both
+#: moved to agentorchestrator (migration steps 1 and 2). Kept as an empty tuple so the
+#: surface test can still assert that nothing transitional leaked back in.
+TRANSITIONAL = ()
 
 __all__ = list(PUBLISHED_API) + list(TRANSITIONAL)
