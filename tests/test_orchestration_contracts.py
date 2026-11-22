@@ -560,7 +560,7 @@ def test_package_version_matches_pyproject():
 
 
 def test_distribution_name_is_not_the_import_name():
-    """The PyPI name is `agentgatedb`; imports stay `core.orchestration`.
+    """The PyPI name is `agentgaterunner`; imports stay `core.orchestration`.
 
     Documented explicitly because the mismatch is surprising: 'agentgate' is taken on
     PyPI by an unrelated project, so the distribution was renamed while the import path
@@ -570,7 +570,7 @@ def test_distribution_name_is_not_the_import_name():
 
     root = Path(__file__).resolve().parents[1]
     data = tomllib.loads((root / "pyproject.toml").read_text())
-    assert data["project"]["name"] == "agentgatedb"
+    assert data["project"]["name"] == "agentgaterunner"
     # The import package must remain `core.orchestration` -- consumers depend on it,
     # and the rename is distribution-level only.
     assert "core.orchestration" in data["tool"]["setuptools"]["packages"]

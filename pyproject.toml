@@ -6,8 +6,8 @@ build-backend = "setuptools.build_meta"
 # Distribution name on PyPI. NOT the import name: consumers still write
 # `from core.orchestration import ...` because the top-level package is `core`.
 # "agentgate" is taken on PyPI by an unrelated project (bestagents/omniagents),
-# so the distribution is published as "agentgatedb" (DEC-401 follow-up).
-name = "agentgatedb"
+# so the distribution is published under its own name (DEC-401 follow-up).
+name = "agentgaterunner"
 version = "0.2.0"
 description = "Open-model agent runners with platform bots, plus the handoff contract consumed by agentorchestrator"
 readme = "README.md"
