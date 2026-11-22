@@ -537,3 +537,41 @@ def test_handoff_surface_pulls_no_bot_stack():
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == "", f"handoff surface pulled: {out.stdout.strip()}"
+
+
+# --------------------------------------------------------------------------
+# Release integrity (DEC-406): the version must be stated in exactly one shape.
+# --------------------------------------------------------------------------
+
+def test_package_version_matches_pyproject():
+    """A published version that disagrees with the package constant is un-shippable.
+
+    PyPI versions are immutable, so this must fail in CI rather than after an upload.
+    """
+    import tomllib
+    import core.orchestration as pkg
+
+    root = Path(__file__).resolve().parents[1]
+    declared = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
+    assert pkg.__version__ == declared, (
+        f"core/orchestration.__version__ ({pkg.__version__}) != "
+        f"pyproject.toml ({declared})"
+    )
+
+
+def test_distribution_name_is_not_the_import_name():
+    """The PyPI name is `agentgaterunner`; imports stay `core.orchestration`.
+
+    Documented explicitly because the mismatch is surprising: 'agentgate' is taken on
+    PyPI by an unrelated project, so the distribution was renamed while the import path
+    was kept for consumers.
+    """
+    import tomllib
+
+    root = Path(__file__).resolve().parents[1]
+    data = tomllib.loads((root / "pyproject.toml").read_text())
+    assert data["project"]["name"] == "agentgaterunner"
+    # The import package must remain `core.orchestration` -- consumers depend on it,
+    # and the rename is distribution-level only.
+    assert "core.orchestration" in data["tool"]["setuptools"]["packages"]
+    assert "schemas/*.json" in data["tool"]["setuptools"]["package-data"]["core.orchestration"]

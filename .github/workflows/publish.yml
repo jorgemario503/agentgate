@@ -1,0 +1,126 @@
+name: Publish
+
+# Publishes the distribution to PyPI via Trusted Publishing (OIDC) -- no API token,
+# no stored secret. PyPI must have a "pending publisher" configured for:
+#   owner/repo : jorgemario503/agentgate
+#   workflow   : publish.yml
+#   environment: pypi
+# A tag push is the only trigger: releases must be deliberate.
+
+on:
+  push:
+    tags: ["v*"]
+  # Allow a dry run (build + verify, no upload) from the Actions UI or a branch.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and verify only; do not upload to PyPI"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # full history + tags, needed for the tag check
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      # The most common release mistake is a tag that disagrees with the declared
+      # version. Catch it before anything is uploaded: PyPI versions are immutable,
+      # so a wrong upload cannot be undone, only yanked.
+      - name: Verify tag matches pyproject version
+        id: check
+        run: |
+          python - <<'PY'
+          import os, re, sys, tomllib, pathlib
+
+          pyproject = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
+          declared = pyproject["project"]["version"]
+          ref = os.environ.get("GITHUB_REF_NAME", "")
+
+          # Mirror the same constant the package exposes, so the two cannot drift.
+          init = pathlib.Path("core/orchestration/__init__.py").read_text()
+          m = re.search(r'__version__\s*=\s*"([^"]+)"', init)
+          if not m:
+              sys.exit("core/orchestration/__init__.py has no __version__")
+          if m.group(1) != declared:
+              sys.exit(
+                  f"version mismatch: pyproject.toml says {declared}, "
+                  f"core/orchestration/__init__.py says {m.group(1)}"
+              )
+
+          if ref.startswith("v"):
+              if ref != f"v{declared}":
+                  sys.exit(f"tag {ref} != declared version v{declared}")
+              print(f"tag {ref} matches declared version")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"version={declared}\n")
+          print(f"dist version: {declared}")
+          PY
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      # Proves the schemas actually shipped. agentorchestrator's drift check depends
+      # on them being present in the installed distribution (DEC-402/406).
+      - name: Verify wheel contents
+        run: |
+          python - <<'PY'
+          import sys, zipfile, pathlib
+          wheels = list(pathlib.Path("dist").glob("*.whl"))
+          if len(wheels) != 1:
+              sys.exit(f"expected exactly one wheel, found {wheels}")
+          names = zipfile.ZipFile(wheels[0]).namelist()
+          schemas = [n for n in names if "/schemas/" in n and n.endswith(".json")]
+          if len(schemas) != 5:
+              sys.exit(f"expected 5 schema files in the wheel, found {len(schemas)}: {schemas}")
+          for required in ("core/orchestration/__init__.py",):
+              if required not in names:
+                  sys.exit(f"wheel is missing {required}")
+          print(f"wheel OK: {len(schemas)} schemas present")
+          PY
+
+      - name: Check metadata renders
+        run: python -m twine check dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    # Never publish from a manual dry run.
+    if: startsWith(github.ref, 'refs/tags/v') && (github.event_name != 'workflow_dispatch' || inputs.dry_run == false)
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/agentgaterunner
+    permissions:
+      id-token: write          # OIDC token for Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

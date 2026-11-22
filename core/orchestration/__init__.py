@@ -33,6 +33,11 @@ the bot stack.
 """
 from __future__ import annotations
 
+#: Distribution version, mirrored from pyproject.toml. Kept here so a consumer can
+#: assert which contract it is running against without reading package metadata.
+#: A test asserts this equals pyproject.toml's version.
+__version__ = "0.2.0"
+
 from core.orchestration.authz import (
     NotAuthorized,
     is_gate_approver,
