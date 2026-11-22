@@ -550,7 +550,7 @@ class DeepInfraAgentClient:
         """
         if self._usage_sink is None:
             return
-        from core.orchestration.usage import normalize_usage, safe_emit
+        from core.handoff.usage import normalize_usage, safe_emit
         record = normalize_usage(
             data,
             runner="deepinfra",

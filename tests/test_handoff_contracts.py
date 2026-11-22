@@ -1,4 +1,4 @@
-"""Milestone 01 / ORCH-CONTRACT-001..006 — orchestration JSON contract validators.
+"""Milestone 01 / ORCH-CONTRACT-001..006 — handoff JSON contract validators.
 
 Pure-function tests: no I/O beyond the schemas directory, no runner, no network.
 Each acceptance criterion has at least one negative case, because a validator that
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from core.orchestration import (
+from core.handoff import (
     ValidationError,
     check_path_contained,
     require_valid,
@@ -28,7 +28,7 @@ def _schemas_dir() -> Path:
     have silently had no schemas to check -- the one place vendoring can go wrong
     (DEC-402/406). Resolve via the importable package instead.
     """
-    import core.orchestration as _pkg
+    import core.handoff as _pkg
     return Path(_pkg.__file__).resolve().parent / "schemas"
 
 
@@ -393,7 +393,7 @@ def test_digest_allows_attributed_bounded_decision_note():
 # silently — which is worse than having only one of them.
 # --------------------------------------------------------------------------
 
-from core.orchestration import validate as _v  # noqa: E402
+from core.handoff import validate as _v  # noqa: E402
 
 _SCHEMA_CODE_PAIRS = [
     ("handoff.schema.json", _v._HANDOFF_REQUIRED, _v._HANDOFF_ALLOWED),
@@ -427,7 +427,7 @@ def _module_source(relpath):
     return (Path(__file__).resolve().parents[1] / relpath).read_text()
 
 
-def _orchestration_modules():
+def _handoff_modules():
     """Every Python module in the orchestration package.
 
     Globbed rather than hardcoded: the previous version listed two files by hand, so five
@@ -435,12 +435,12 @@ def _orchestration_modules():
     checked at all. A dependency guard that silently covers a fraction of the package is
     worse than none, because it reads as enforced.
     """
-    pkg = Path(__file__).resolve().parents[1] / "core" / "orchestration"
+    pkg = Path(__file__).resolve().parents[1] / "core" / "handoff"
     return sorted(str(p.relative_to(pkg.parents[1]))
                   for p in pkg.rglob("*.py") if "__pycache__" not in str(p))
 
 
-@pytest.mark.parametrize("relpath", _orchestration_modules())
+@pytest.mark.parametrize("relpath", _handoff_modules())
 def test_orchestration_package_imports_no_runner_or_bot(relpath):
     src = _module_source(relpath)
     for forbidden in ("from runners", "import runners",
@@ -455,14 +455,14 @@ def test_orchestration_package_imports_no_runner_or_bot(relpath):
 
 def test_dependency_guard_covers_every_module():
     """Meta-test: the guard must enumerate the whole package, whatever it contains."""
-    modules = _orchestration_modules()
+    modules = _handoff_modules()
     names = {m.rsplit("/", 1)[-1] for m in modules}
 
     # The guard must cover *every* module present, so a new one cannot slip in
     # unguarded. Asserting a fixed list rots as modules move to agentorchestrator
     # (workspace lifecycle already did); asserting self-coverage does not.
     assert len(modules) == len(list((Path(__file__).resolve().parents[1]
-                                     / "core" / "orchestration").glob("*.py"))), \
+                                     / "core" / "handoff").glob("*.py"))), \
         "module enumeration missed a file"
 
     # And the guard must still cover the modules that are actually here.
@@ -479,7 +479,7 @@ def test_dependency_guard_covers_every_module():
 # --------------------------------------------------------------------------
 
 def test_published_api_names_all_resolve():
-    import core.orchestration as pkg
+    import core.handoff as pkg
     missing = [n for n in pkg.PUBLISHED_API if not hasattr(pkg, n)]
     assert not missing, f"PUBLISHED_API lists names that do not exist: {missing}"
 
@@ -490,7 +490,7 @@ def test_published_api_is_the_documented_runner_surface():
     If this list changes, the orchestrator's pin must be bumped. Updating this test
     without touching the boundary record means the contract changed silently.
     """
-    import core.orchestration as pkg
+    import core.handoff as pkg
     assert set(pkg.PUBLISHED_API) == {
         # wire contracts
         "ROLES", "TRANSITIONS", "RECOMMENDATIONS", "SEVERITIES",
@@ -506,13 +506,13 @@ def test_published_api_is_the_documented_runner_surface():
 
 
 def test_transitional_and_published_do_not_overlap():
-    import core.orchestration as pkg
+    import core.handoff as pkg
     assert not (set(pkg.PUBLISHED_API) & set(pkg.TRANSITIONAL))
 
 
 def test_all_exports_are_declared():
     """__all__ must be exactly published + transitional, so nothing hides."""
-    import core.orchestration as pkg
+    import core.handoff as pkg
     assert set(pkg.__all__) == set(pkg.PUBLISHED_API) | set(pkg.TRANSITIONAL)
 
 
@@ -524,7 +524,7 @@ def test_all_exports_are_declared():
 def test_handoff_surface_pulls_no_bot_stack():
     """Importing the package must not require openai/slack/telegram/agentdb.
 
-    The wheel ships only `core` + `core.orchestration`, but `core` contains heavy
+    The wheel ships only `core` + `core.handoff`, but `core` contains heavy
     modules. This asserts the *import graph* of the published surface stays clean, which
     is the property that actually matters -- file size is cosmetic, an import failure in
     the orchestrator is not.
@@ -534,7 +534,7 @@ def test_handoff_surface_pulls_no_bot_stack():
     code = (
         "import sys\n"
         "before=set(sys.modules)\n"
-        "import core.orchestration\n"
+        "import core.handoff\n"
         "new=set(sys.modules)-before\n"
         "bad=[m for m in new if any(k in m for k in "
         "('agentdb','slack','telegram','openai','httpx','anthropic'))]\n"
@@ -555,7 +555,7 @@ def test_package_version_matches_pyproject():
     PyPI versions are immutable, so this must fail in CI rather than after an upload.
     """
     import tomllib
-    import core.orchestration as pkg
+    import core.handoff as pkg
 
     root = Path(__file__).resolve().parents[1]
     declared = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
@@ -566,18 +566,16 @@ def test_package_version_matches_pyproject():
 
 
 def test_distribution_name_is_not_the_import_name():
-    """The PyPI name is `agentgaterunner`; imports stay `core.orchestration`.
+    """The PyPI name is `agentgaterunner`; the import package is `core.handoff`.
 
-    Documented explicitly because the mismatch is surprising: 'agentgate' is taken on
-    PyPI by an unrelated project, so the distribution was renamed while the import path
-    was kept for consumers.
+    Documented explicitly because the mismatch is surprising: the distribution is
+    `agentgaterunner` (agentgate is taken on PyPI), while the import path is `core.handoff`
+    (renamed from core.orchestration in DEC-404).
     """
     import tomllib
 
     root = Path(__file__).resolve().parents[1]
     data = tomllib.loads((root / "pyproject.toml").read_text())
     assert data["project"]["name"] == "agentgaterunner"
-    # The import package must remain `core.orchestration` -- consumers depend on it,
-    # and the rename is distribution-level only.
-    assert "core.orchestration" in data["tool"]["setuptools"]["packages"]
-    assert "schemas/*.json" in data["tool"]["setuptools"]["package-data"]["core.orchestration"]
+    assert "core.handoff" in data["tool"]["setuptools"]["packages"]
+    assert "schemas/*.json" in data["tool"]["setuptools"]["package-data"]["core.handoff"]
