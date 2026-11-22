@@ -41,6 +41,7 @@ from __future__ import annotations
 from core.orchestration.registry import (
     RepoRegistry,
     RegistryError,
+    SnapshotRecord,
     WorktreeRecord,
     STATUS_ACTIVE,
     STATUS_CLEANED,
@@ -68,6 +69,7 @@ from core.orchestration.validate import (
 __all__ = [
     "RepoRegistry",
     "RegistryError",
+    "SnapshotRecord",
     "WorktreeRecord",
     "STATUS_ACTIVE",
     "STATUS_CLEANED",

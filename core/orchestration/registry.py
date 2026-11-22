@@ -73,7 +73,24 @@ CREATE TABLE IF NOT EXISTS leases (
     heartbeat_at  REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS snapshots (
+    resource_id    TEXT PRIMARY KEY,
+    repository_id  TEXT NOT NULL,
+    repo_root      TEXT NOT NULL,
+    workflow_id    TEXT NOT NULL,
+    spec_id        TEXT NOT NULL,
+    attempt_id     TEXT NOT NULL,
+    candidate_commit TEXT NOT NULL,
+    snapshot_path  TEXT NOT NULL,
+    status         TEXT NOT NULL,
+    created_at     REAL NOT NULL,
+    updated_at     REAL NOT NULL,
+    last_error     TEXT,
+    UNIQUE (workflow_id, spec_id, attempt_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_worktrees_workflow ON worktrees(workflow_id);
+CREATE INDEX IF NOT EXISTS idx_snapshots_workflow  ON snapshots(workflow_id);
 CREATE INDEX IF NOT EXISTS idx_worktrees_status   ON worktrees(status);
 """
 
@@ -133,6 +150,26 @@ def _pid_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+@dataclass(frozen=True)
+class SnapshotRecord:
+    resource_id: str
+    repository_id: str
+    repo_root: str
+    workflow_id: str
+    spec_id: str
+    attempt_id: str
+    candidate_commit: str
+    snapshot_path: str
+    status: str
+    created_at: float
+    updated_at: float
+    last_error: Optional[str]
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> "SnapshotRecord":
+        return cls(**{k: row[k] for k in row.keys()})
 
 
 class RepoRegistry:
@@ -337,6 +374,80 @@ class RepoRegistry:
                            (resource_id,)).fetchone()
         if row is None:
             raise RegistryError(f"unknown resource {resource_id!r}")
+
+    # -- snapshots ---------------------------------------------------------
+    def register_snapshot(
+        self,
+        *,
+        resource_id: str,
+        repository_id: str,
+        repo_root: str,
+        workflow_id: str,
+        spec_id: str,
+        attempt_id: str,
+        candidate_commit: str,
+        snapshot_path: str,
+    ) -> SnapshotRecord:
+        """Record a snapshot row *before* it is created (same discipline as worktrees)."""
+        now = time.time()
+        with self._txn() as conn:
+            try:
+                conn.execute(
+                    """INSERT INTO snapshots
+                       (resource_id, repository_id, repo_root, workflow_id, spec_id,
+                        attempt_id, candidate_commit, snapshot_path, status,
+                        created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    (resource_id, repository_id, repo_root, workflow_id, spec_id,
+                     attempt_id, candidate_commit, snapshot_path,
+                     STATUS_PROVISIONING, now, now),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise RegistryError(
+                    f"snapshot for attempt {attempt_id!r} is already registered"
+                ) from exc
+        row = self._connect().execute(
+            "SELECT * FROM snapshots WHERE resource_id=?", (resource_id,)
+        ).fetchone()
+        return SnapshotRecord.from_row(row)
+
+    def get_snapshot(self, resource_id: str) -> Optional[SnapshotRecord]:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM snapshots WHERE resource_id=?",
+                               (resource_id,)).fetchone()
+        return SnapshotRecord.from_row(row) if row else None
+
+    def list_snapshots(self, *, status: Optional[str] = None) -> list[SnapshotRecord]:
+        with self._connect() as conn:
+            if status is None:
+                rows = conn.execute("SELECT * FROM snapshots ORDER BY created_at").fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM snapshots WHERE status=? ORDER BY created_at", (status,)
+                ).fetchall()
+        return [SnapshotRecord.from_row(r) for r in rows]
+
+    def mark_snapshot_active(self, resource_id: str) -> None:
+        with self._txn() as conn:
+            conn.execute(
+                "UPDATE snapshots SET status=?, updated_at=? WHERE resource_id=?",
+                (STATUS_ACTIVE, time.time(), resource_id),
+            )
+
+    def mark_snapshot_cleaned(self, resource_id: str) -> None:
+        with self._txn() as conn:
+            conn.execute(
+                "UPDATE snapshots SET status=?, updated_at=? WHERE resource_id=?",
+                (STATUS_CLEANED, time.time(), resource_id),
+            )
+
+    def mark_snapshot_failed(self, resource_id: str, reason: str) -> None:
+        with self._txn() as conn:
+            conn.execute(
+                "UPDATE snapshots SET status=?, last_error=?, updated_at=? "
+                "WHERE resource_id=?",
+                (STATUS_CLEANUP_FAILED, reason[:2000], time.time(), resource_id),
+            )
 
     # -- recovery ---------------------------------------------------------
     def find_orphans(self, *, older_than_seconds: float = 0.0) -> list[WorktreeRecord]:
