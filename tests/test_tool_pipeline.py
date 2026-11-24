@@ -12,21 +12,39 @@ def _log(n=2000):
 
 
 class TestPipelineDisabled(unittest.TestCase):
+    """`enabled=False` disables *compression*.
+
+    Dedup is a separate, independently-flagged stage (``CROSS_TURN_DEDUP_ENABLED``), so these
+    tests set ``dedup_enabled=False`` explicitly. Without that they inherit whatever the host
+    environment has exported, which is how this test came to pass on a clean machine and fail
+    on one with the flag set — the ambient-config hazard conftest.py's docstring warns about.
+    """
+
+    def _pipeline(self, d):
+        return ToolResultPipeline(d, session_id="s", workspace_id="w", enabled=False,
+                                  min_chars=1000, dedup_enabled=False)
+
     def test_disabled_is_byte_identical(self):
         with tempfile.TemporaryDirectory() as d:
-            p = ToolResultPipeline(d, session_id="s", workspace_id="w", enabled=False,
-                                   min_chars=1000)
+            p = self._pipeline(d)
             text = _log()
             self.assertEqual(p.process(text, tool_name="Bash"), text)
 
     def test_disabled_no_artifact_written(self):
         with tempfile.TemporaryDirectory() as d:
-            p = ToolResultPipeline(d, session_id="s", workspace_id="w", enabled=False,
-                                   min_chars=1000)
+            p = self._pipeline(d)
             p.process(_log(), tool_name="Bash")
             # no artifacts directory populated
             arts = list((__import__("pathlib").Path(d) / "_artifacts").glob("**/*"))
             self.assertEqual([x for x in arts if x.is_file()], [])
+
+    def test_disabled_leaves_dedup_independent(self):
+        """Compression off does not silently disable dedup — they are separate stages."""
+        with tempfile.TemporaryDirectory() as d:
+            p = ToolResultPipeline(d, session_id="s", workspace_id="w",
+                                   enabled=False, dedup_enabled=True)
+            assert p.enabled is False
+            assert p.dedup_enabled is True
 
 
 class TestPipelineEnabled(unittest.TestCase):
