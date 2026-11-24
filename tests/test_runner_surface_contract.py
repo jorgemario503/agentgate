@@ -41,13 +41,24 @@ def _core_modules_imported_by_runners() -> set[str]:
     return mods
 
 
+def _modules_named_in_contract() -> set[str]:
+    """The module names the contract lists in section 3.1.
+
+    Sliced on section headings, not on the word-form count: changing "Twelve" to "Thirteen"
+    silently moved the boundary once and made the parser read the wrong prose.
+    """
+    text = _contract_text()
+    section = text.split("### 3.1")[1].split("### 3.2")[0]
+    # The list is a run of `name`, `name`, ... in one paragraph.
+    first = section.split("Measured from the source (not assumed):")[1]
+    # Stop at the closing note: it names the four *old* flat modules, which are not in the set.
+    first = first.split("Note `context` covers")[0]
+    return set(re.findall(r"`([a-z_]+)`", first))
+
+
 def test_contract_lists_exactly_the_modules_runners_import():
     """The module list in the contract must equal the real set."""
-    text = _contract_text()
-
-    # The contract names the modules in one inline code block of backticks.
-    listed = set(re.findall(r"`([a-z_]+)`", text.split("### 3.1")[1].split("Twelve modules")[0]))
-
+    listed = _modules_named_in_contract()
     actual = _core_modules_imported_by_runners()
     assert listed == actual, (
         "contract module list drifted from the code\n"
