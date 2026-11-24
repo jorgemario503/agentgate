@@ -82,6 +82,27 @@ Note `context` covers what used to be four flat modules; the M1 grouping moved `
 `cache_key`, `tool_pipeline` and `tool_compression` inside it. The orchestrator does not name
 either shape — it gets them transitively.
 
+### 3.2 Third-party dependencies the orchestrator inherits
+
+Installing `agentgaterunner` pulls these automatically — they are base dependencies, not extras:
+
+| Package | Why it is required |
+|---|---|
+| `openai` | `runners/deepinfra.py:13` and `runners/fireworks.py:21` — `from openai import AsyncOpenAI`, module level |
+| `httpx` | `runners/local.py:26` — module level |
+| `python-dotenv` | `core/config.py:5` — `load_dotenv()` runs at import |
+| `pyyaml` | `core/skills/catalog.py:36` — the skills catalog parses YAML frontmatter at module level |
+
+**Deliberately not base dependencies:**
+
+| Package | Why it stays an extra |
+|---|---|
+| `claude-agent-sdk` | `runners/claude.py` imports it at module level, so **that module cannot be imported** without it — but `runners/__init__.py` is empty and only the bots import `claude.py`, lazily. The orchestrator never touches it. Verified: absent in a clean install, all three open runners imported fine. |
+| `agentdatabase` | Imported **lazily inside a function** (`core/agentdb.py`), so the runners run without it; governed memory degrades to disabled |
+
+**Consequence for the orchestrator:** `claude-agent-sdk` must **not** be listed as a requirement of
+an open-model-only deployment, and `agentdatabase` is required only if governed memory is enabled.
+
 ---
 
 ## 4. Constraints the orchestrator must honour

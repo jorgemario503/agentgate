@@ -93,3 +93,59 @@ def test_set_model_gap_is_documented():
             )
             return
     pytest.skip("no runner implements set_model")
+
+
+# --------------------------------------------------------------------------
+# Section 3.2: the dependency claims must match the actual imports.
+#
+# Two rounds of getting numbers wrong in this same document is enough. These parse the source
+# rather than trusting the prose.
+# --------------------------------------------------------------------------
+
+def _module_level_third_party() -> dict[str, set[str]]:
+    """Map third-party package -> files importing it at module level (runners + shipped core)."""
+    import ast
+
+    watch = {"openai", "httpx", "claude_agent_sdk", "dotenv", "yaml", "agentdb"}
+    found: dict[str, set[str]] = {}
+    paths = list((REPO / "runners").glob("*.py"))
+    paths += [REPO / "core" / "config.py", REPO / "core" / "skills" / "catalog.py",
+              REPO / "core" / "agentdb.py"]
+    for path in paths:
+        if not path.is_file():
+            continue
+        for node in ast.parse(path.read_text()).body:      # module level ONLY
+            mods: list[str] = []
+            if isinstance(node, ast.ImportFrom) and node.module:
+                mods.append(node.module.split(".")[0])
+            elif isinstance(node, ast.Import):
+                mods.extend(a.name.split(".")[0] for a in node.names)
+            for mod in mods:
+                if mod in watch:
+                    found.setdefault(mod, set()).add(path.name)
+    return found
+
+
+def test_documented_base_dependencies_are_imported_at_module_level():
+    """openai, httpx, dotenv and pyyaml are claimed as base deps -- prove they are needed."""
+    found = _module_level_third_party()
+    for pkg in ("openai", "httpx", "dotenv", "yaml"):
+        assert pkg in found, f"contract claims {pkg} is required, but nothing imports it"
+
+
+def test_claude_sdk_is_module_level_but_confined():
+    """It IS a module-level import -- but only in claude.py, which nothing auto-imports."""
+    found = _module_level_third_party()
+    assert found.get("claude_agent_sdk") == {"claude.py"}, found.get("claude_agent_sdk")
+    # And runners/__init__.py must stay empty, or importing `runners` would pull the SDK.
+    init = (REPO / "runners" / "__init__.py").read_text().strip()
+    assert not init, "runners/__init__.py must stay empty so `import runners` needs no SDK"
+
+
+def test_agentdb_is_not_module_level():
+    """The contract says it is imported lazily; that is why it is an extra."""
+    found = _module_level_third_party()
+    assert "agentdb" not in found, (
+        "core/agentdb.py imports the agentdb package at module level; "
+        "the contract says it is lazy, so either the doc or the code is wrong"
+    )
