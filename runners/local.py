@@ -1021,7 +1021,7 @@ class LocalRunner:
 
         _tool_pipeline = None
         if _cfg_tool_compression_enabled():
-            from core.tool_pipeline import ToolResultPipeline
+            from core.context.tool_pipeline import ToolResultPipeline
             _tool_pipeline = ToolResultPipeline(
                 store.base, session_id=thread_id, workspace_id=workspace_path,
             )
@@ -1119,7 +1119,7 @@ class LocalRunner:
 
                 if _cfg_repo_map_enabled():
                     try:
-                        from core.repo_map import build_repo_map_segment
+                        from core.context.repo_map import build_repo_map_segment
                         _seg = build_repo_map_segment(workspace_path)
                         if _seg:
                             memory_context = ((memory_context + "\n\n") if memory_context else "") + _seg

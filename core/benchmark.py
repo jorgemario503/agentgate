@@ -26,8 +26,8 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Optional
 
-from core.tool_pipeline import ToolResultPipeline
-from core.tool_compression import CompressConfig
+from core.context.tool_pipeline import ToolResultPipeline
+from core.context.tool_compression import CompressConfig
 
 # Advisory estimator kept local so the harness has no provider dependency.
 def _est_tokens(text: str) -> int:

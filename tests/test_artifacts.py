@@ -1,4 +1,4 @@
-"""Tests for core.artifacts — bounded, session/workspace-scoped original store.
+"""Tests for core.context.artifacts — bounded, session/workspace-scoped original store.
 
 These correspond to the spec's T11 (restart), T12 (cross-session isolation),
 T13 (path security) and T18 (bounded reads). The store must:
@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core.artifacts import ArtifactStore
+from core.context.artifacts import ArtifactStore
 
 
 class TestArtifactStore(unittest.TestCase):

@@ -1,4 +1,4 @@
-"""Tests for core.repo_map — Python-first repository map (C3).
+"""Tests for core.context.repo_map — Python-first repository map (C3).
 
 Maps to the spec's tests: T14 (ignore/secret/binary/out-of-root excluded),
 T15 (incremental add/edit/delete), T16 (syntax errors reported, scan continues),
@@ -10,7 +10,7 @@ import textwrap
 import unittest
 from pathlib import Path
 
-from core.repo_map import RepoMap, build_repo_map, build_repo_map_segment, find_repo_root
+from core.context.repo_map import RepoMap, build_repo_map, build_repo_map_segment, find_repo_root
 
 
 def _write(root: Path, rel: str, content: str):

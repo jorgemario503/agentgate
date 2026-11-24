@@ -35,7 +35,7 @@ from typing import Callable, Optional
 
 # Optional import to avoid a hard dependency cycle; the store type is duck-typed.
 try:  # pragma: no cover - typing only
-    from core.artifacts import ArtifactRef, ArtifactStore
+    from core.context.artifacts import ArtifactRef, ArtifactStore
 except Exception:  # pragma: no cover
     ArtifactRef = object  # type: ignore
     ArtifactStore = object  # type: ignore

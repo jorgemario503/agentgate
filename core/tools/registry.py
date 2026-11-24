@@ -229,7 +229,7 @@ def build_tools(
         ),
     }
     if pipeline is not None:
-        from core.tool_pipeline import tool_result_read_handler
+        from core.context.tool_pipeline import tool_result_read_handler
         tools["tool_result_read"] = t(
             "tool_result_read",
             "Retrieve the exact original text of a compressed tool result by its "

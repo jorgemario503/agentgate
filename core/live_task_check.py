@@ -26,8 +26,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from core.providers import settings_for
-from core.tool_pipeline import ToolResultPipeline
-from core.tool_compression import CompressConfig
+from core.context.tool_pipeline import ToolResultPipeline
+from core.context.tool_compression import CompressConfig
 
 
 LIVE_FLAG = "AGENTGATE_LIVE_TESTS"

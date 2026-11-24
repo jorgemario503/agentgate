@@ -18,7 +18,7 @@ import unittest
 from runners.deepinfra import DeepInfraAgentClient
 from core.tools.registry import Tool, _tool_schema, build_tools
 from runners.deepinfra import JsonFileSessionStore
-from core.tool_pipeline import ToolResultPipeline
+from core.context.tool_pipeline import ToolResultPipeline
 
 
 class _TmpStore(JsonFileSessionStore):

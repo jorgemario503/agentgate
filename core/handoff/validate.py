@@ -14,7 +14,7 @@ Design invariants
   missing or wrong ``schema_version`` is an error, never a default.
 - **Path containment is enforced here, not downstream.** Every artifact reference is
   checked for traversal, absolute paths, and symlink escape, mirroring
-  ``core.artifacts.ArtifactStore._confine``.
+  ``core.context.artifacts.ArtifactStore._confine``.
 - **Full SHAs only.** Abbreviated or fabricated commit ids are rejected, because the
   entire review model rests on an immutable, unambiguous candidate.
 - **Errors are collected, not raised on first failure**, so a caller (and a test) can
@@ -110,7 +110,7 @@ def _check_iso_utc(value: Any, name: str, where: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Path containment — mirrors core.artifacts.ArtifactStore._confine
+# Path containment — mirrors core.context.artifacts.ArtifactStore._confine
 # ---------------------------------------------------------------------------
 
 def check_path_contained(raw_path: str, root: Path) -> str | None:
