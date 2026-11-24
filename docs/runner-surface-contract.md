@@ -53,9 +53,27 @@ Four names. Everything else in `runners/` is internal.
 and generated shell commands. The orchestrator passes its own pattern list; it does not depend on
 agentgate's defaults.
 
-### 2.4 `ToolPolicy` — **new, not yet implemented**
+### 2.4 `ToolPolicy` — scoped tool approval
 
-The scoped approval hook (see §5). Until it exists, the orchestrator uses `enable_auto_approve`.
+`core.tool_policy.ToolPolicy`, installed with `Runner.set_tool_policy(policy)`.
+
+The orchestrator supplies a **scope** per agent instead of answering approval prompts. The
+reviewer can read-only; the implementer can write within its worktree.
+
+**Ordering is the contract** — `core.tool_policy.decide` encodes it once for all three runners:
+
+```
+1. deny rule        -> deny    (an operator's hard block ALWAYS wins)
+2. allow rule       -> allow
+3. policy.allows()  -> allow   (the orchestrator's scope)
+4. auto-approve     -> allow   (thread-wide flag)
+5. otherwise        -> ask     (block on a human)
+```
+
+A policy **cannot** re-enable something a deny rule blocked; step 1 precedes step 3 deliberately,
+and a test pins it. A policy that raises is treated as deny — fail closed, never widen.
+
+`None` (the default) leaves the ladder exactly as it was, so a solo developer sees no change.
 
 ---
 
@@ -73,9 +91,9 @@ These change freely and the orchestrator must not import them:
 Shipping `runners/` requires their `core/` dependencies. Measured from the source (not assumed):
 
 `config`, `providers`, `sessions`, `history`, `agentdb`, `prompts`, `approvals`, `commands`,
-`tools`, `skills`, `reasoning`, `context`
+`tools`, `skills`, `reasoning`, `context`, `tool_policy`
 
-Twelve modules, plus `core.handoff` — which is a **separate** published contract (DEC-108) and may
+Thirteen modules, plus `core.handoff` — which is a **separate** published contract (DEC-108) and may
 be imported directly.
 
 Note `context` covers what used to be four flat modules; the M1 grouping moved `artifacts`,

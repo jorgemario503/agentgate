@@ -26,6 +26,7 @@ from typing import Any, Awaitable, Callable, Optional
 import httpx
 
 import core.approvals as approvals
+from core.tool_policy import decide, policy_allows
 import core.config as _cfg
 from core.config import (
     ADDITIONAL_DIRS,
@@ -741,6 +742,7 @@ class LocalAgentClient:
 def _make_permission_callback(
     thread_id: str, post_fn, platform: PlatformConfig, runner_name: str,
     interrupt_requested: set[str],
+    policy=None,
 ):
     store = platform.session_store
 
@@ -788,9 +790,18 @@ def _make_permission_callback(
             if decision == "allow":
                 return PermissionResultAllow()
 
-            if approvals.is_auto_approved(thread_id):
+            resolution = decide(
+                rule_decision=decision,
+                policy=policy,
+                tool_name=tool_name,
+                input_data=input_data,
+                auto_approved=approvals.is_auto_approved(thread_id),
+            )
+            if resolution == "allow":
                 store.append_audit_log(thread_id, "tool_call", {
-                    "tool": tool_name, "target": target[:500], "decision": "auto_allow",
+                    "tool": tool_name, "target": target[:500],
+                    "decision": "policy_allow" if policy_allows(policy, tool_name, input_data)
+                                else "auto_allow",
                 })
                 return PermissionResultAllow()
 
@@ -869,6 +880,8 @@ class LocalRunner:
         self._session_workspace_paths: dict[str, str] = {}
         # Optional telemetry sink; None keeps default behaviour byte-identical.
         self._usage_sink = None
+        # Optional per-agent tool scope; None keeps the existing approval ladder.
+        self._tool_policy = None
 
     @classmethod
     def from_env(cls, name: str) -> "LocalRunner":
@@ -886,6 +899,15 @@ class LocalRunner:
             summary_chunk_chars=settings.summary_chunk_chars,
             summary_max_tokens=settings.summary_max_tokens or 2048,
         )
+
+    def set_tool_policy(self, policy) -> None:
+        """Install (or clear) a scoped ToolPolicy for this runner.
+
+        ``None`` restores the existing ladder: deny rules, allow rules, thread-wide
+        auto-approve, then a human prompt. A policy only pre-authorises calls that would
+        otherwise ask, and never overrides a deny rule.
+        """
+        self._tool_policy = policy
 
     def set_usage_sink(self, sink) -> None:
         """Install (or clear) a UsageRecord sink. None restores default behaviour."""
@@ -1049,6 +1071,7 @@ class LocalRunner:
             system_prompt=system_prompt,
             can_use_tool=_make_permission_callback(
                 thread_id, post_fn, platform, self.name, self._interrupt_requested,
+                policy=self._tool_policy,
             ),
             session_id=thread_id,
             session_store=history_store,
