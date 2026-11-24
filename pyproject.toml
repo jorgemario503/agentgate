@@ -28,11 +28,18 @@ classifiers = [
 dependencies = [
     "python-dotenv>=1.0",
     "pyyaml>=6.0",
+    # httpx: the local runner's transport.
     "httpx>=0.27",
+    # openai: the deepinfra and fireworks runners import AsyncOpenAI at module level,
+    # so shipping those runners makes this a hard requirement of the package.
+    "openai>=1.0.0,<3.0.0",
 ]
 
 [project.optional-dependencies]
 # Everything needed to actually run AgentGate's bots and runners.
+#
+# openai is NOT repeated here: it is a base dependency (the deepinfra and fireworks
+# runners import it at module level, and both ship in the wheel).
 full = [
     "slack-bolt>=1.20",
     "aiohttp>=3.9",
@@ -40,7 +47,6 @@ full = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
     "claude-agent-sdk>=0.1.0",
-    "openai>=1.0.0,<3.0.0",
     "agentdatabase>=0.7.0",
 ]
 test = ["pytest>=9.0", "pytest-asyncio>=1.0"]
@@ -49,23 +55,42 @@ test = ["pytest>=9.0", "pytest-asyncio>=1.0"]
 Homepage = "https://github.com/jorgemario503/agentgate"
 
 [tool.setuptools]
-# Ship only what agentorchestrator consumes. `core` is included because
-# core.handoff is a subpackage, but its heavy modules (agentdb, bots glue,
-# sessions, commands...) are pruned below: none of them are importable from the
-# handoff surface, and pulling the bot stack into the orchestrator defeats the
-# point of a separate package.
+# Ship what agentorchestrator consumes. Two consumers now, with different needs:
+#
+#   * core.handoff  -- the wire contract. Narrow on purpose; see
+#                      docs/runner-surface-contract.md.
+#   * runners + the core subpackages they import -- the open-model execution
+#                      harness (AgentDB, skills, reasoning, tool/context
+#                      management). Decided in DEC-1102: the orchestrator
+#                      imports these rather than copying or simulating them.
+#
+# core is listed because its subpackages hang off it. bots/ is deliberately
+# NOT shipped: the orchestrator has its own platform adapter, and AgentGate's
+# bot stack must not become a dependency of a second product.
+#
+# core.context ships because the runners import it; artifacts, cache_key,
+# tool_pipeline and tool_compression live inside it after the M1 grouping.
+#
 # core.orchestration is kept ONLY as a deprecated alias (removed in 0.4.0).
-packages = ["core", "core.handoff", "core.orchestration"]
+packages = [
+    "core",
+    "core.handoff",
+    "core.orchestration",
+    "core.context",
+    "core.reasoning",
+    "core.skills",
+    "core.tools",
+    "runners",
+]
 
 [tool.setuptools.exclude-package-data]
 "*" = ["*.pyc", "__pycache__/*"]
 
 # NOTE on wheel contents: `core` ships as a whole package, so the wheel also contains
-# bot-stack modules (agentdb, commands, sessions...). That is dead weight, not a
-# coupling: importing core.handoff pulls none of them, which is asserted by
-# tests/test_orchestration_contracts.py::test_handoff_surface_pulls_no_bot_stack.
-# Trimming them from the wheel needs per-module exclusion that setuptools does not
-# express cleanly; revisit only if wheel size becomes a real problem.
+# bot-stack modules (agentdb, commands, sessions...). With runners/ shipped those are no
+# longer dead weight -- the runners import agentdb, approvals, config, prompts, providers
+# and sessions directly. See docs/runner-surface-contract.md section 3.1 for the measured
+# list; a test keeps that list and this package set honest.
 
 [tool.setuptools.package-data]
 # The schema JSON is not loaded at runtime (validators are hand-written Python),
