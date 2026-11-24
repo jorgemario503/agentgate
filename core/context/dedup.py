@@ -30,7 +30,7 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
-from core.artifacts import ArtifactStore
+from core.context.artifacts import ArtifactStore
 
 
 @dataclass(frozen=True)

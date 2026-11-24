@@ -46,7 +46,7 @@ class TestRegistry(unittest.TestCase):
         self.assertNotIn("tool_result_read", self._tools())
 
     def test_result_read_added_with_pipeline(self):
-        from core.tool_pipeline import ToolResultPipeline
+        from core.context.tool_pipeline import ToolResultPipeline
         real = ToolResultPipeline(self.dir, session_id="s", workspace_id="w", enabled=True)
         tools = self._tools(pipeline=real)
         self.assertIn("tool_result_read", tools)

@@ -1,8 +1,8 @@
-"""Tests for core.tool_pipeline — the shared runner adapter (T01, T08, T12, T18)."""
+"""Tests for core.context.tool_pipeline — the shared runner adapter (T01, T08, T12, T18)."""
 import tempfile
 import unittest
 
-from core.tool_pipeline import ToolResultPipeline
+from core.context.tool_pipeline import ToolResultPipeline
 
 
 def _log(n=2000):

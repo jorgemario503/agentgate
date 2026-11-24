@@ -25,8 +25,8 @@ from pathlib import Path
 from typing import Optional
 
 from core import config as _cfg
-from core.artifacts import ArtifactStore
-from core.tool_compression import CompressConfig, maybe_compress
+from core.context.artifacts import ArtifactStore
+from core.context.tool_compression import CompressConfig, maybe_compress
 
 
 class ToolResultPipeline:
@@ -65,7 +65,7 @@ class ToolResultPipeline:
         self._dedup = None
         if self.dedup_enabled:
             try:
-                from core.dedup import DedupIndex
+                from core.context.dedup import DedupIndex
                 self._dedup = DedupIndex(
                     self.store, session_id=session_id, workspace_id=workspace_id,
                 )
@@ -76,7 +76,7 @@ class ToolResultPipeline:
         """Return model-facing text for a tool result. Never raises."""
         try:
             if self._dedup is not None and isinstance(text, str):
-                from core.dedup import dedup_tool_result
+                from core.context.dedup import dedup_tool_result
                 deduped = dedup_tool_result(
                     text, self._dedup, tool_name=tool_name,
                     min_chars=self._min_chars,

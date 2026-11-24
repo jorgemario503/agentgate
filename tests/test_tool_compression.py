@@ -1,4 +1,4 @@
-"""Tests for core.tool_compression — native, targeted tool-result compression.
+"""Tests for core.context.tool_compression — native, targeted tool-result compression.
 
 Maps to the spec's TESTS_AND_BENCHMARKS.md: T01 (disabled == identity),
 T02 (never touches non-tool/system input), T04 (repetitive logs keep errors),
@@ -9,8 +9,8 @@ plus the output-format contract (explicit omission markers + retrieval handle).
 import tempfile
 import unittest
 
-from core.artifacts import ArtifactStore
-from core.tool_compression import (
+from core.context.artifacts import ArtifactStore
+from core.context.tool_compression import (
     CompressConfig,
     CompressionOutcome,
     maybe_compress,

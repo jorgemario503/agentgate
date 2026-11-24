@@ -1,4 +1,4 @@
-"""Tests for core.dedup — deterministic cross-turn deduplication (C2).
+"""Tests for core.context.dedup — deterministic cross-turn deduplication (C2).
 
 Maps to the spec's TESTS_AND_BENCHMARKS.md: T09 (identical outputs -> later
 references earlier; earliest unchanged), T10 (similar-but-different -> no false
@@ -8,8 +8,8 @@ session isolation (T12).
 import tempfile
 import unittest
 
-from core.artifacts import ArtifactStore
-from core.dedup import DedupIndex, dedup_tool_result
+from core.context.artifacts import ArtifactStore
+from core.context.dedup import DedupIndex, dedup_tool_result
 
 
 class TestDedupIndex(unittest.TestCase):

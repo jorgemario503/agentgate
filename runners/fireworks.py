@@ -29,7 +29,7 @@ from core.config import (
     SDK_ALLOWED_TOOLS,
 )
 from core.agentdb import AgentDBSurface
-from core.cache_key import cache_key_kwargs, retry_without_cache_key
+from core.context.cache_key import cache_key_kwargs, retry_without_cache_key
 from core.history import JsonFileHistoryStore
 from core.prompts import (
     apply_system_prompt,
@@ -1026,7 +1026,7 @@ class FireworksRunner:
 
         _tool_pipeline = None
         if _cfg_tool_compression_enabled():
-            from core.tool_pipeline import ToolResultPipeline
+            from core.context.tool_pipeline import ToolResultPipeline
             _tool_pipeline = ToolResultPipeline(
                 store.base, session_id=thread_id, workspace_id=workspace_path,
             )
@@ -1114,7 +1114,7 @@ class FireworksRunner:
 
                 if _cfg_repo_map_enabled():
                     try:
-                        from core.repo_map import build_repo_map_segment
+                        from core.context.repo_map import build_repo_map_segment
                         _seg = build_repo_map_segment(workspace_path)
                         if _seg:
                             memory_context = ((memory_context + "\n\n") if memory_context else "") + _seg

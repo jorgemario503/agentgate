@@ -19,7 +19,7 @@ without it rather than failing the turn.
 
 import pytest
 
-from core.cache_key import (
+from core.context.cache_key import (
     CACHE_KEY_HEADER,
     CACHE_KEY_FIELD,
     cache_key_kwargs,
