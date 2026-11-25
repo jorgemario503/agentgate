@@ -22,6 +22,18 @@ project's release practice.
   before the block is built (`prune_session_directories`), so long sessions do
   not accumulate dead scratch paths. Elevated (deliberately granted) entries
   are never pruned.
+- **`ADDITIONAL_DIRS` entries are normalised.** `"a, b"` (comma + space) left a
+  leading space on every entry after the first, which made it non-absolute and
+  non-existent, so the entry disappeared silently. Entries are now stripped and
+  `~` is expanded. Relative entries are still kept verbatim rather than
+  resolved against an unrelated process cwd.
+
+### Documentation
+- README: new **"Repo map and `ADDITIONAL_DIRS`"** section — what the map is and
+  is not, why the session workspace is not your repository, why
+  `ADDITIONAL_DIRS` should point at narrow per-project absolute paths (not a
+  parent folder such as `$HOME`), the path-format rules, and how to preview the
+  map before enabling it.
 
 ## [0.1.0] — 2026-11-20
 

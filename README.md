@@ -557,6 +557,135 @@ opt-in live model probes and how to run them safely, see
 
 ---
 
+## Repo map and `ADDITIONAL_DIRS`
+
+### What the repo map is
+
+When `AGENTGATE_REPO_MAP_ENABLED=true`, AgentGate builds a **compact overview of
+a repository** — language breakdown, top-level directories, and Python
+classes/functions as `file:line kind name(signature)` — and injects it as
+per-turn context (an ephemeral system block just before the user turn, so the
+cached prompt prefix is not disturbed).
+
+It is an **orientation aid, not a file index**. Its job is to stop a model from
+spending its first several tool calls rediscovering where things live: which
+directories exist, which module holds a class, how large each area is. Exact
+source is still read with `Read`/`Grep`/`Bash`, and the map itself says so.
+Nothing in it is authoritative — it is a sketch, and the files are the truth.
+
+```env
+AGENTGATE_REPO_MAP_ENABLED=true    # master switch (default false)
+AGENTGATE_REPO_MAP_MAX_TOKENS=1500 # size cap for the rendered map
+```
+
+### Why `ADDITIONAL_DIRS` matters for it
+
+Here is the thing that surprises people: **the session workspace is not your
+repository.**
+
+Each session gets its own scratch directory,
+`agent-sessions/<platform>/<thread-id>/workspace`. That directory is empty and
+created for the session; it is where relative paths and `Bash` land by default.
+It is almost never the directory you actually want worked on.
+
+So the agent starts in an empty scratch folder and has to be told — or has to
+work out — which real project you mean. Two mechanisms bridge that gap:
+
+- **`ADDITIONAL_DIRS`** — the projects the agent may read and write. This is how
+  you tell it, once, where your code lives.
+- **`remember_directory` / `lookup_directory`** — the agent remembers a
+  name→path mapping it learns during a session, so it can find it again later.
+
+If neither is set, an agent asked to "look at the Komper repo" has no starting
+point, and will spend turns searching — or, worse, guess and work in the wrong
+tree. Filling `ADDITIONAL_DIRS` is the single highest-value configuration step
+for multi-repository use.
+
+```env
+# .env — always use ABSOLUTE paths (see below)
+ADDITIONAL_DIRS=/Users/me/dev/komper,/Users/me/dev/api-service
+```
+
+Prefer **narrow, per-project** entries. Point `ADDITIONAL_DIRS` at each
+repository you want available, not at a parent folder such as
+`/Users/me/dev` or `/`: a parent turns every sibling project into something the
+agent can wander into, and the workspace snapshot that AgentDB injects will
+enumerate the whole tree two levels deep on every turn.
+
+### Do `ADDITIONAL_DIRS` entries have to be full paths?
+
+**Yes — use absolute paths.** Write `/Users/me/dev/komper`, not
+`~/dev/komper`-relative-to-somewhere or `dev/komper`.
+
+The reason is that a relative path has no reliable meaning here. The process
+current directory is not the session workspace, so a relative entry would
+resolve against an unrelated location and quietly point at the wrong tree (or at
+nothing). Absolute paths mean the same thing from every runner and every
+session.
+
+What AgentGate does, and does not, do with the value:
+
+| You write | Result |
+|---|---|
+| `/Users/me/dev/komper` | Used as-is. **Recommended.** |
+| `/Users/me/dev/a, /Users/me/dev/b` | Comma-separated; surrounding spaces are trimmed. |
+| `~/dev/komper` | `~` is expanded to your home directory. Prefer spelling it out. |
+| `dev/komper` | Kept verbatim and **not** resolved. Use an absolute path. |
+
+Entries are not checked for existence at startup — a path may be created later,
+and a missing directory should not stop the bot from starting. A typo therefore
+fails quietly rather than loudly. If a directory you expect to be visible is not,
+check the startup banner: both bots print
+`[startup] Additional dirs: ...` with the parsed list.
+
+The two runners use the value differently, which is worth knowing when
+debugging:
+
+- **Claude runner** — entries are passed to the SDK as allowed directories, so
+  they genuinely widen where the agent may operate.
+- **Open-model runners** (`local`, `fireworks`, `deepinfra`) — entries do not
+  restrict anything by themselves. The filesystem tools accept absolute paths
+  anywhere; `ADDITIONAL_DIRS` is what *tells the agent where to look* and what
+  the workspace snapshot reports.
+
+Either way, an absolute path to a real project directory is what you want.
+
+### What the map is built from
+
+The map is built from a **repository root** — the nearest directory containing
+`.git`. Because the session workspace is a scratch dir that usually sits inside
+some other checkout, the root is never guessed from the workspace alone; a map
+is only produced for a root the session plausibly works in. When there is no
+such root, **no map is injected at all** — a short omission is better than a
+sizeable, confidently wrong map of an unrelated repository.
+
+Scanning is deliberately conservative, because the map is sent to a model:
+
+- **Root-confined** — only files under the repository root are read.
+- **Ignore-aware** — honours `.gitignore` plus a built-in deny list (VCS dirs,
+  `.env`/key/credential files, vendored deps, build output, caches, binaries).
+- **Never executed** — Python is parsed with `ast`, not imported.
+- **Bounded** — per-file size cap, total file cap, and the rendered token
+  budget; oversize and binary files are skipped rather than guessed at.
+- **Status** — a syntax error is reported and the scan continues; a failure
+  leaves the rest of the context untouched.
+
+### When to turn it on
+
+Worth it when the agent repeatedly works inside a real repository and spends its
+first turns orienting. Not worth it for one-off tasks in a scratch directory, or
+when the map cannot be anchored to the repo being worked on — in that case leave
+it off rather than pay for a map of the wrong tree.
+
+To check what it would inject before enabling it:
+
+```bash
+python -c "from core.context.repo_map import build_repo_map_segment as b; \
+           print((b('/path/to/repo') or '(no map)')[:2000])"
+```
+
+---
+
 ## Security
 
 - **Blocked patterns** — `BLOCKED_PATTERNS` in `core/config.py` (settable via

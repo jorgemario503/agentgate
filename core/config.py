@@ -17,8 +17,31 @@ APPROVAL_TIMEOUT_SECONDS = int(os.environ.get("APPROVAL_TIMEOUT_SECONDS", 4 * 60
 REAPER_INTERVAL_SECONDS = 300
 SLOW_RESPONSE_SECONDS = int(os.environ.get("SLOW_RESPONSE_SECONDS", 60))
 
-# Extra directories the agent may read/write freely (comma-separated absolute paths).
-ADDITIONAL_DIRS = list(filter(None, os.environ.get("ADDITIONAL_DIRS", "").split(",")))
+# Extra directories the agent may read/write freely. Comma-separated, and each
+# entry must be an ABSOLUTE path ("/Users/me/code/thing"): a relative path would
+# resolve against whatever the process cwd happens to be, which is not the
+# session workspace, so it would silently point somewhere unintended.
+#
+# Entries are normalised here rather than at each use site, because the two
+# consumers differ in how forgiving they are:
+#   * runners/claude.py passes them straight to the SDK's add_dirs, where a
+#     malformed entry is an opaque failure, and
+#   * the directory report and repo map resolve them against the filesystem,
+#     where a stray leading space simply means "does not exist" and the entry
+#     disappears without a word.
+# Stripping whitespace and expanding "~" makes the obvious ways of writing
+# "a, b" behave the way the operator meant. Nothing here validates existence:
+# a path may legitimately be created later, and startup must not fail on it.
+def _parse_additional_dirs(raw: str) -> list[str]:
+    out: list[str] = []
+    for entry in (raw or "").split(","):
+        path = os.path.expanduser(entry.strip())
+        if path:
+            out.append(path)
+    return out
+
+
+ADDITIONAL_DIRS = _parse_additional_dirs(os.environ.get("ADDITIONAL_DIRS", ""))
 
 # -------------------------
 # SLACK
