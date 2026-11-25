@@ -386,36 +386,102 @@ def build_repo_map(
     return RepoMap(root, entries, failures, languages)
 
 
-def find_repo_root(workspace_path: str | Path) -> Optional[Path]:
-    """Return a repo root for `workspace_path`: a git root or the workspace.
+def _is_git_root(path: Path) -> bool:
+    try:
+        return path.is_dir() and (path / ".git").exists()
+    except OSError:
+        return False
 
-    Uses only filesystem markers (a ``.git`` entry); never executes git. Returns
-    None when the workspace is not a directory.
+
+def _repo_root_within(path: Path) -> Optional[Path]:
+    """Nearest enclosing repo root for `path`, or None.
+
+    Distinct from :func:`find_repo_root` in that it never returns a non-repo
+    directory: the caller needs to know whether it actually found a repository.
     """
-    p = Path(workspace_path)
-    if not p.is_dir():
+    try:
+        cur = Path(path).resolve()
+    except OSError:
         return None
-    cur = p.resolve()
+    if not cur.is_dir():
+        return None
     for candidate in (cur, *cur.parents):
-        if (candidate / ".git").exists():
+        if _is_git_root(candidate):
             return candidate
+    return None
+
+
+def find_repo_root(
+    workspace_path: str | Path,
+    *,
+    candidates: Optional[list[str]] = None,
+) -> Optional[Path]:
+    """Pick the repository a session is plausibly working in, or None.
+
+    The session workspace is a scratch directory
+    (``agent-sessions/<platform>/<thread>/workspace``) that usually sits *inside*
+    some other checkout. Walking up from it therefore finds whichever repository
+    happens to enclose AgentGate — the wrong answer, confidently.
+
+    Resolution order, most authoritative first:
+
+    1. **candidates** — paths the session has evidence for (a confirmed working
+       directory). The first one inside a repository wins.
+    2. **The workspace itself**, when it is not nested inside any repository —
+       i.e. a bare directory the operator is working in directly.
+    3. **None.** Deliberately: when nothing indicates a repository, no map is
+       rendered. A short omission is better than a large, wrong map, because the
+       model cannot tell a wrong map from a right one.
+
+    Step 2 is skipped when the workspace is nested, which is the actual bug this
+    guards against: ``agent-sessions/.../workspace`` is not a repository, and its
+    enclosing checkout is not the user's project.
+    """
+    if candidates:
+        for cand in candidates:
+            if not cand:
+                continue
+            found = _repo_root_within(Path(cand))
+            if found is not None:
+                return found
+        # Evidence existed but pointed at no repository: fall through rather
+        # than guessing an enclosing one.
+
+    p = Path(workspace_path) if workspace_path else None
+    if p is None or not p.is_dir():
+        return None
+    try:
+        cur = p.resolve()
+    except OSError:
+        return None
+
+    if _is_git_root(cur):
+        return cur
+    if _repo_root_within(cur) is not None:
+        # Nested inside some checkout (typically AgentGate's own). That is not
+        # the user's project; refuse to map it.
+        return None
     return cur
 
 
 def build_repo_map_segment(
     workspace_path: str | Path,
     *,
+    candidates: Optional[list[str]] = None,
     manifest_path: Optional[str | Path] = None,
     max_tokens: int = _DEFAULT_MAX_TOKENS,
 ) -> Optional[str]:
     """Render a repo-map segment for session context, or None if unavailable.
 
+    ``candidates`` are paths the session has evidence for; see
+    :func:`find_repo_root`. When nothing resolves to a repository, returns None
+    so the caller keeps its normal context unchanged.
+
     Reuses a persisted manifest when present (incremental), then re-saves it.
-    Never raises; any problem yields None so the caller keeps its normal
-    context unchanged.
+    Never raises.
     """
     try:
-        root = find_repo_root(workspace_path)
+        root = find_repo_root(workspace_path, candidates=candidates)
         if root is None:
             return None
         prev = RepoMap.load_manifest(manifest_path) if manifest_path else None

@@ -17,8 +17,65 @@ APPROVAL_TIMEOUT_SECONDS = int(os.environ.get("APPROVAL_TIMEOUT_SECONDS", 4 * 60
 REAPER_INTERVAL_SECONDS = 300
 SLOW_RESPONSE_SECONDS = int(os.environ.get("SLOW_RESPONSE_SECONDS", 60))
 
-# Extra directories the agent may read/write freely (comma-separated absolute paths).
-ADDITIONAL_DIRS = list(filter(None, os.environ.get("ADDITIONAL_DIRS", "").split(",")))
+# Extra directories the agent may read/write freely. Comma-separated, and each
+# entry must be an ABSOLUTE path ("/Users/me/code/thing"): a relative path would
+# resolve against whatever the process cwd happens to be, which is not the
+# session workspace, so it would silently point somewhere unintended.
+#
+# Entries are normalised AND validated here, once, rather than at each use site,
+# because the consumers differ in how forgiving they are:
+#   * runners/claude.py passes them straight to the SDK's add_dirs, where a
+#     malformed entry is an opaque failure, and
+#   * the directory report and orientation block resolve them against the
+#     filesystem, where a bad value simply means "does not exist" and the entry
+#     disappears without a word.
+# Silent disappearance is the failure this guards against: the operator believes
+# a directory is available and the agent quietly cannot see it. Every rejected
+# value carries a reason, which the bots print at startup.
+def _parse_additional_dirs(raw: str) -> list[str]:
+    """Split on commas and trim, preserving empty entries for validation.
+
+    An empty entry is kept (as ``""``) so a stray comma is reported by the
+    validator rather than dropped here, where it would leave no trace.
+    """
+    return [(entry or "").strip() for entry in (raw or "").split(",")]
+
+
+def _validate_additional_dirs(entries: list[str]) -> list:
+    """Run the shared validator. Never raises; a broken import is not fatal."""
+    try:
+        from core.context.dir_validation import check_additional_dirs
+
+        return check_additional_dirs(entries)
+    except Exception:
+        # Fail open on the *feature*, not on the process: expose the entries
+        # unvalidated rather than starting with none.
+        from core.context.dir_validation import DirCheck
+
+        return [DirCheck(e, os.path.expanduser(e), "accepted") for e in entries if e]
+
+
+# Validated once at import so every consumer sees the same decision, and so the
+# reason a value was refused is available to the startup banner.
+ADDITIONAL_DIR_CHECKS = _validate_additional_dirs(
+    _parse_additional_dirs(os.environ.get("ADDITIONAL_DIRS", ""))
+)
+
+#: The entries actually handed to runners. Refused values are excluded here
+#: rather than at each use site, so the Claude allow-list, the AgentDB workspace
+#: snapshot and the orientation block cannot disagree about what is configured.
+ADDITIONAL_DIRS = [c.path for c in ADDITIONAL_DIR_CHECKS if c.usable]
+
+
+def additional_dirs_report() -> list[str]:
+    """Human-readable lines describing rejected or dangling entries.
+
+    Empty when every configured entry is fine. Bots print these at startup so a
+    typo is visible instead of leaving a directory mysteriously unavailable.
+    """
+    from core.context.dir_validation import describe_problems
+
+    return describe_problems(ADDITIONAL_DIR_CHECKS)
 
 # -------------------------
 # SLACK

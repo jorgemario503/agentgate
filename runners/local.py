@@ -34,7 +34,7 @@ from core.config import (
     CLAUDE_SETTINGS,
     SDK_ALLOWED_TOOLS,
 )
-from core.agentdb import AgentDBSurface
+from core.agentdb import AgentDBSurface, prune_session_directories
 from core.history import JsonFileHistoryStore
 from core.prompts import (
     apply_system_prompt,
@@ -100,8 +100,10 @@ def _extract_files(text: str) -> list[str]:
     return _re.findall(r'(?:[\w./\-]+/[\w.\-]+\.\w{1,6}|/[\w./\-]+\.\w{1,6})', text)
 
 
-def _extract_dirs(text: str) -> list[str]:
-    return _re.findall(r'/(?:[\w./\-]+/)+', text)
+def _extract_dirs(text: str, workspace_path: str = "") -> list[str]:
+    """Directories the turn mentions that actually exist (see core.context)."""
+    from core.context.dir_evidence import extract_existing_dirs
+    return extract_existing_dirs(text, workspace_path=workspace_path)
 
 
 def _estimate_tokens(obj: Any) -> int:
@@ -878,6 +880,10 @@ class LocalRunner:
         self._agent_id: str = "agent"
         self._turn_counters: dict[str, int] = {}
         self._session_workspace_paths: dict[str, str] = {}
+        # Static per-session context (orientation + repo map), built once at
+        # start/resume. Held here rather than rebuilt per turn: it changes
+        # only when the session does.
+        self._session_static_context: dict[str, str] = {}
         # Optional telemetry sink; None keeps default behaviour byte-identical.
         self._usage_sink = None
         # Optional per-agent tool scope; None keeps the existing approval ladder.
@@ -962,6 +968,9 @@ class LocalRunner:
 
     async def close_client(self, thread_id: str) -> None:
         client = self._clients.pop(thread_id, None)
+        # The next client for this thread is a *new* session and must rebuild
+        # its static context (and re-resolve the repo root, which may differ).
+        self._session_static_context.pop(thread_id, None)
         if client:
             try:
                 await client.disconnect()
@@ -1086,6 +1095,51 @@ class LocalRunner:
         self._session_workspace_paths[thread_id] = workspace_path
         return client
 
+    def _static_session_context(self, thread_id: str, workspace_path: str) -> str:
+        """Orientation + repo map, built once per session and cached.
+
+        Both describe things that do not change between turns: where the session
+        starts, which paths the operator exposed, and the shape of the repository
+        being worked in. Re-deriving them every turn would re-scan the repository
+        on every message and re-send identical text, so they are built at the
+        session boundary instead -- client creation, which happens on a new
+        session and on a cold resume.
+
+        Never raises: a failure leaves the session with no static context rather
+        than breaking the turn.
+        """
+        cached = self._session_static_context.get(thread_id)
+        if cached is not None:
+            return cached
+
+        parts: list[str] = []
+        try:
+            from core.context.orientation import build_orientation
+            _orient = build_orientation(workspace_path, ADDITIONAL_DIRS)
+            if _orient:
+                parts.append(_orient)
+        except Exception:
+            pass
+
+        try:
+            if _cfg_repo_map_enabled():
+                from core.context.repo_map import build_repo_map_segment
+                # Candidates are the places the session has evidence for: the
+                # validated ADDITIONAL_DIRS entries. The workspace alone is a
+                # scratch dir that may sit inside an unrelated checkout, so it
+                # is not sufficient evidence on its own (see find_repo_root).
+                _seg = build_repo_map_segment(
+                    workspace_path, candidates=list(ADDITIONAL_DIRS),
+                )
+                if _seg:
+                    parts.append(_seg)
+        except Exception:
+            pass
+
+        rendered = "\n\n".join(parts)
+        self._session_static_context[thread_id] = rendered
+        return rendered
+
     async def run_prompt(
         self, thread_id: str, workspace_path: str, prompt: str,
         resume_session_id, post_fn, message_id=None, platform: PlatformConfig = None,
@@ -1126,7 +1180,19 @@ class LocalRunner:
                 prompt = invocation.task
 
                 memory_context = None
+                # Static context (orientation + repo map) is injected at the
+                # session boundary only -- start and resume -- not every turn.
+                # It describes things that do not change mid-session, and
+                # rebuilding the map here would re-scan the repository on every
+                # message. It is still per-session, so it travels in the
+                # ephemeral context and never in the cached system prefix.
+                _static = self._static_session_context(thread_id, workspace_path)
+                if _static:
+                    memory_context = _static
                 if self._agentdb_middleware is not None:
+                    # Entries whose directory is gone would otherwise be
+                    # re-injected as "session directories" every turn.
+                    prune_session_directories(self._agentdb_middleware, thread_id)
                     messages, _ = await self._agentdb_middleware.prepare_turn_async(
                         user_query=prompt,
                         session_id=thread_id,
@@ -1139,15 +1205,6 @@ class LocalRunner:
                             "## Relevant memory for this turn\n"
                             + "\n\n".join(memory_parts)
                         )
-
-                if _cfg_repo_map_enabled():
-                    try:
-                        from core.context.repo_map import build_repo_map_segment
-                        _seg = build_repo_map_segment(workspace_path)
-                        if _seg:
-                            memory_context = ((memory_context + "\n\n") if memory_context else "") + _seg
-                    except Exception:
-                        pass
 
                 _skill_nudge = client.skills_recommendation(prompt)
                 if _skill_nudge:
@@ -1169,7 +1226,7 @@ class LocalRunner:
 
                 response_text = "\n".join(text_parts).strip()
                 if self._agentdb_middleware is not None:
-                    dirs = _extract_dirs(response_text)
+                    dirs = _extract_dirs(response_text, workspace_path)
                     files = _extract_files(response_text)
                     self._agentdb_middleware.report_directories(thread_id, dirs)
                     turn_num = self._turn_counters.get(thread_id, 0)

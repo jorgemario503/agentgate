@@ -91,13 +91,22 @@ short-circuits to the pointer; a first occurrence goes through compression.
 
 ## Repository map (C3, optional)
 
-When `AGENTGATE_REPO_MAP_ENABLED=true` and the workspace is a git repository,
-AgentGate injects a small, deterministic **repo map** at session start: language
-breakdown, top-level dirs, and Python classes/functions with `file:line` and
-signatures. It is added as *ephemeral per-session context* (a system-role
-message just before the user turn), so the cacheable system-prompt prefix is
-not disturbed.
+When `AGENTGATE_REPO_MAP_ENABLED=true`, AgentGate injects a small, deterministic
+**repo map** at session start and on resume: language breakdown, top-level dirs,
+and Python classes/functions with `file:line` and signatures. It is added as
+*ephemeral per-session context* (a system-role message just before the user
+turn), so the cacheable system-prompt prefix is not disturbed.
 
+It is injected **once per session, not per turn**. The map is near-static, so
+re-sending it every turn would spend tokens on identical text and re-scan the
+repository on every message; it is rebuilt only when a new session begins.
+
+- **Rooted on evidence, not ancestry:** the session workspace is a scratch dir
+  that usually sits inside some other checkout, so walking up from it finds the
+  wrong repository. The root comes from a validated `ADDITIONAL_DIRS` entry
+  inside a repository, else the workspace when it is not nested. When nothing
+  resolves to a repository, **no map is injected** — a wrong map is worse than
+  no map, because the model cannot tell the difference.
 - **Safe scanning:** root-confined, honours `.gitignore` plus a default deny
   list (VCS dirs, `.env`/key/credential files, vendored deps, build output,
   caches, binaries). Oversize and binary files are skipped, not guessed. Project

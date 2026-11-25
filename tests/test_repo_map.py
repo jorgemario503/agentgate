@@ -157,11 +157,48 @@ class TestSegment(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def test_find_repo_root_uses_git_marker(self):
+    def test_workspace_that_is_a_repo_root_resolves_to_itself(self):
         (self.root / ".git").mkdir()
-        sub = self.root / "a" / "b"
-        sub.mkdir(parents=True)
-        self.assertEqual(find_repo_root(sub).resolve(), self.root.resolve())
+        self.assertEqual(find_repo_root(self.root).resolve(), self.root.resolve())
+
+    def test_nested_workspace_does_not_inherit_enclosing_repo(self):
+        # Regression: a session workspace lives at
+        # agent-sessions/<platform>/<thread>/workspace, usually *inside* some
+        # checkout. Walking up found that checkout and mapped the wrong
+        # repository with full confidence. A nested, non-repo workspace must
+        # resolve to None instead.
+        (self.root / ".git").mkdir()
+        scratch = self.root / "agent-sessions" / "slack" / "123" / "workspace"
+        scratch.mkdir(parents=True)
+        self.assertIsNone(find_repo_root(scratch))
+
+    def test_nested_workspace_uses_a_candidate_when_given(self):
+        (self.root / ".git").mkdir()
+        scratch = self.root / "agent-sessions" / "slack" / "123" / "workspace"
+        scratch.mkdir(parents=True)
+        project = self.root / "project"
+        (project / ".git").mkdir(parents=True)
+        got = find_repo_root(scratch, candidates=[str(project)])
+        self.assertEqual(got.resolve(), project.resolve())
+
+    def test_bare_directory_outside_any_repo_is_used(self):
+        # No enclosing repo: the workspace *is* the thing to map.
+        bare = self.root / "bare"
+        bare.mkdir()
+        self.assertEqual(find_repo_root(bare).resolve(), bare.resolve())
+
+    def test_candidate_outside_a_repo_falls_back_to_workspace(self):
+        # Workspace is not nested in any repo; a candidate that names a
+        # non-repository must not override that.
+        scratch = self.root / "ws"
+        scratch.mkdir()
+        not_a_repo = self.root / "plain"
+        not_a_repo.mkdir()
+        got = find_repo_root(scratch, candidates=[str(not_a_repo)])
+        self.assertEqual(got.resolve(), scratch.resolve())
+
+    def test_missing_workspace_is_none(self):
+        self.assertIsNone(find_repo_root(self.root / "nope"))
 
     def test_segment_rendered_and_persisted(self):
         (self.root / ".git").mkdir()

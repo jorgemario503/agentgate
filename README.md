@@ -557,6 +557,250 @@ opt-in live model probes and how to run them safely, see
 
 ---
 
+## Repo map and `ADDITIONAL_DIRS`
+
+### What the repo map is
+
+When `AGENTGATE_REPO_MAP_ENABLED=true`, AgentGate builds a **compact overview of
+a repository** — language breakdown, top-level directories, and Python
+classes/functions as `file:line kind name(signature)` — and injects it at the
+**start of a session and on resume**, not on every turn (see *When it is
+injected* below).
+
+It is an **orientation aid, not a file index**. Its job is to stop a model from
+spending its first several tool calls rediscovering where things live: which
+directories exist, which module holds a class, how large each area is. Exact
+source is still read with `Read`/`Grep`/`Bash`, and the map itself says so.
+Nothing in it is authoritative — it is a sketch, and the files are the truth.
+
+```env
+AGENTGATE_REPO_MAP_ENABLED=true    # master switch (default false)
+AGENTGATE_REPO_MAP_MAX_TOKENS=1500 # size cap for the rendered map
+```
+
+### When it is injected
+
+Once per session: when the session starts, and again when it is resumed after
+being closed or timing out. The same applies to the orientation block below.
+
+The map describes things that do not change mid-session — the directory
+structure, where modules live — so re-sending it every turn would cost tokens
+for identical text, and re-*building* it every turn would re-scan the repository
+on every message. It is held for the life of the session and rebuilt when a new
+session begins, including re-resolving which repository is being worked in.
+
+Per-turn context still carries what genuinely varies: retrieved memory and the
+skills nudge.
+
+### What the agent is told at the start of every session
+
+Independently of the repo map, the open-model runners (`local`, `fireworks`,
+`deepinfra`) inject a short **orientation block** telling the agent where it is:
+
+```
+## Your starting directory
+- Path: agent-sessions/slack/<thread-id>/workspace
+- This is where you start, and where relative paths and `Bash` land.
+- It is a scratch directory for this session. It is normally empty, and it is
+  normally NOT the project the user is asking about.
+- Do not assume the user's code is here. If the task names a location, work
+  there instead; if you cannot tell where the work belongs, ask.
+```
+
+When `ADDITIONAL_DIRS` is set, a **second, separately-titled block** follows it:
+
+```
+## Additional directories available to you
+These are separate from your starting directory. They exist because the user has
+made them available — they are real projects, not scratch space.
+- /Users/me/dev/komper
+- /Users/me/dev/api
+Use one only when the task points at it. A path being listed here does not mean
+you should switch to it: the user's instruction for this task decides where you
+work. Changes here affect a real project.
+```
+
+The two blocks are kept apart on purpose. Collapsing them into one list is what
+causes the failure this section exists to prevent: an agent that cannot tell
+"where I am" from "what I may touch" starts the task in a listed repository
+instead of the one the user named — better-informed than a guess, but still the
+wrong directory.
+
+The second block appears only when at least one **usable** `ADDITIONAL_DIRS`
+entry exists — accepted, or a dangling path that will be used once it appears —
+so a single-directory setup does not pay for an empty section. Entries that fail
+validation (relative, a filesystem root, your home directory, shell fragments)
+are refused before they reach this block, with the reason printed at startup;
+see *Do `ADDITIONAL_DIRS` entries have to be full paths?* below. Both blocks are
+per-session and therefore travel in the ephemeral context, never in the cached
+system prefix. Both are built once per session (start and resume) and are
+independent of `AGENTDB_ENABLED`, so orientation survives with governed memory
+switched off.
+
+### Why `ADDITIONAL_DIRS` matters for it
+
+Here is the thing that surprises people: **the session workspace is not your
+repository.**
+
+Each session gets its own scratch directory,
+`agent-sessions/<platform>/<thread-id>/workspace`. That directory is empty and
+created for the session; it is where relative paths and `Bash` land by default.
+It is almost never the directory you actually want worked on.
+
+So the agent starts in an empty scratch folder and has to be told — or has to
+work out — which real project you mean. Two mechanisms bridge that gap:
+
+- **`ADDITIONAL_DIRS`** — the projects the agent may read and write. This is how
+  you tell it, once, where your code lives.
+- **`remember_directory` / `lookup_directory`** — the agent remembers a
+  name→path mapping it learns during a session, so it can find it again later.
+
+If neither is set, the agent is still told that its starting directory is a
+scratch directory (see the orientation block above) — so it will not silently
+guess — but it has nowhere else to look, so it spends turns searching or has to
+ask. Filling `ADDITIONAL_DIRS` is the single highest-value configuration step
+for multi-repository use.
+
+```env
+# .env — always use ABSOLUTE paths (see below)
+# macOS / Linux:
+ADDITIONAL_DIRS=/Users/me/dev/komper,/Users/me/dev/api-service
+# Windows:
+# ADDITIONAL_DIRS=C:\Users\me\dev\komper,C:\Users\me\dev\api-service
+```
+
+Prefer **narrow, per-project** entries. Point `ADDITIONAL_DIRS` at each
+repository you want available, not at a parent folder such as
+`/Users/me/dev` or `C:\Users\me\dev` or `/`: a parent turns every sibling
+project into something the agent can wander into, and the workspace snapshot
+that AgentDB injects will enumerate the whole tree two levels deep on every
+turn.
+
+### Do `ADDITIONAL_DIRS` entries have to be full paths?
+
+**Yes — use absolute paths.** Write the complete path from the filesystem root
+(`/Users/me/dev/komper` on macOS/Linux, `C:\Users\me\dev\komper` on Windows),
+not a path relative to wherever you happen to be.
+
+The reason is that a relative path has no reliable meaning here. The process
+current directory is not the session workspace, so a relative entry would
+resolve against an unrelated location and quietly point at the wrong tree (or at
+nothing). Absolute paths mean the same thing from every runner and every
+session.
+
+**Both path styles are understood, on any host.** The validator decides how to
+read a value from how it is *written*, not from the operating system it happens
+to be running on — a Windows path in a shared config is judged by Windows rules
+even when validated on macOS or Linux, and vice versa.
+
+What AgentGate accepts, and what it refuses:
+
+| You write | Result |
+|---|---|
+| `/Users/me/dev/komper` | Accepted. **Recommended.** |
+| `C:\Users\me\dev\komper` | Accepted. Drive letters, `D:\…`, forward slashes (`C:/Users/…`) and UNC paths (`\\server\share\repo`) all work. |
+| `/Users/me/dev/a, /Users/me/dev/b` | Comma-separated; surrounding spaces are trimmed. |
+| `~/dev/komper` | Accepted; `~` is expanded to your home directory. |
+| `dev/komper` | **Refused** — not absolute. Reported at startup. |
+| `/`, `C:\`, or `\\server\share` | **Refused** — filesystem root. Reported at startup. |
+| `/Users/me` or `C:\Users\me` | **Refused** — a home directory, too broad. Reported at startup. |
+| `/Users/me/dev/*` | **Refused** — shell/glob characters. Reported at startup. |
+| a path that does not exist | **Warning** — kept, so it works once created. |
+
+Two details worth knowing, because they differ between platforms:
+
+- **Case.** Windows paths are compared case-insensitively, so
+  `C:\Users\Me\Dev` and `c:\users\me\dev` are the same entry (the second is
+  reported as a duplicate). POSIX paths are case-sensitive, so `/Users/me/Dev`
+  and `/Users/me/dev` are two different directories and both are kept.
+- **Separators.** A backslash is a path separator, not an escape character, so
+  Windows paths are never mistaken for shell fragments. Other shell characters
+  (`*`, `?`, `$`, `` ` ``, `|`, `&`, `;`, `<`, `>`) are still refused in both
+  styles.
+
+Refused entries are dropped from `ADDITIONAL_DIRS` for every consumer, so the
+Claude allow-list, the AgentDB workspace snapshot and the orientation block
+always agree about what is configured. A directory you expected to be visible
+but is not should never fail silently: both bots print the reason at startup.
+
+```
+[startup] Additional dirs: ['/Users/me/dev/komper']
+[startup] ADDITIONAL_DIRS [ignored] 'dev/api': not an absolute path; it would
+  resolve against the process working directory, not the session workspace
+[startup] ADDITIONAL_DIRS [ignored] '/Users/me': your home directory exposes
+  every project and personal file; list individual repositories instead
+```
+
+Two entries are worth calling out because they are the most common mistake:
+
+- **Your home directory** (`/Users/me`) is refused. It is the obvious shortcut
+  when you want "all my repos", but it exposes every project *and* every
+  personal file, and it makes the per-turn workspace snapshot walk the whole
+  tree two levels deep. List each repository instead.
+- **A directory that does not exist** is a warning, not a refusal. Paths are
+  checked once at startup, and a directory may legitimately be created later;
+  refusing it would mean a bot that cannot be pointed at a repo before that repo
+  is cloned.
+
+The two runners use the value differently, which is worth knowing when
+debugging:
+
+- **Claude runner** — entries are passed to the SDK as allowed directories, so
+  they genuinely widen where the agent may operate.
+- **Open-model runners** (`local`, `fireworks`, `deepinfra`) — entries do not
+  restrict anything by themselves. The filesystem tools accept absolute paths
+  anywhere; `ADDITIONAL_DIRS` is what *tells the agent where to look* and what
+  the workspace snapshot reports.
+
+Either way, an absolute path to a real project directory is what you want.
+
+### What the map is built from
+
+The map is built from a **repository root** — a directory containing `.git`. The
+session workspace is a scratch directory that usually sits *inside* some other
+checkout, so its enclosing repository (typically AgentGate's own) is **not** a
+valid answer, however tempting it is to walk up and find one.
+
+Resolution, most authoritative first:
+
+1. **A validated `ADDITIONAL_DIRS` entry that is inside a repository.** This is
+   the strongest signal available about where the user's code lives.
+2. **The workspace itself**, when it is not nested inside any repository.
+3. **Nothing.** No map is injected.
+
+The third case is the important one. When nothing indicates a repository, a
+short omission is better than a sizeable, confidently wrong map: a model cannot
+tell a wrong map from a right one, so a wrong map is worse than no map. This is
+also why the map is worth having at all — `ADDITIONAL_DIRS` turns "guess the
+project" into "here is the project".
+
+Scanning is deliberately conservative, because the map is sent to a model:
+
+- **Root-confined** — only files under the repository root are read.
+- **Ignore-aware** — honours `.gitignore` plus a built-in deny list (VCS dirs,
+  `.env`/key/credential files, vendored deps, build output, caches, binaries).
+- **Never executed** — Python is parsed with `ast`, not imported.
+- **Bounded** — per-file size cap, total file cap, and the rendered token
+  budget; oversize and binary files are skipped rather than guessed at.
+- **Status** — a syntax error is reported and the scan continues; a failure
+  leaves the rest of the context untouched.
+
+### When to turn it on
+
+Worth it when the agent repeatedly works inside a real repository and spends its
+first turns orienting. Not worth it for one-off tasks in a scratch directory, or
+when the map cannot be anchored to the repo being worked on — in that case leave
+it off rather than pay for a map of the wrong tree.
+
+To check what it would inject before enabling it:
+
+```bash
+python -c "from core.context.repo_map import build_repo_map_segment as b; \
+           print((b('/path/to/repo') or '(no map)')[:2000])"
+```
+
+---
+
 ## Security
 
 - **Blocked patterns** — `BLOCKED_PATTERNS` in `core/config.py` (settable via

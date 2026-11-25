@@ -4,6 +4,86 @@ All notable changes to AgentGate are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versions follow the
 project's release practice.
 
+## [Unreleased]
+
+### Fixed
+- **The repo map no longer describes the wrong repository.** `find_repo_root`
+  walked up from the session workspace to the nearest `.git`, and session
+  workspaces live at `agent-sessions/<platform>/<thread>/workspace` — inside
+  AgentGate's own checkout. Every session that was not working on AgentGate
+  therefore received a ~1,500-token map of AgentGate, presented with full
+  confidence. Root resolution is now evidence-based: a validated
+  `ADDITIONAL_DIRS` entry inside a repository, else the workspace when it is not
+  nested inside one, else **no map at all**. A wrong map is worse than no map,
+  because a model cannot tell one from the other.
+- **`ADDITIONAL_DIRS` validation was POSIX-only.** It used `os.path.isabs` and
+  `os.sep`, so on macOS/Linux every Windows path (`C:\Users\me\dev\komper`) was
+  refused as "not an absolute path", `C:\` was not recognised as a filesystem
+  root, and Windows duplicates were not collapsed. The validator now picks a
+  path dialect from how the value is *written*, so Windows paths are judged by
+  Windows rules on any host and vice versa. Case handling follows the dialect:
+  case-insensitive for Windows (so `C:\Dev` and `c:\dev` are duplicates),
+  case-sensitive for POSIX. A backslash is treated as a separator, not a shell
+  escape.
+- **"Session directories" no longer contains invented paths.** The per-turn
+  directory report was a bare regex over the model's free text, so any
+  slash-shaped fragment became a directory entry and was re-injected into
+  context every turn (observed: `/agent-sessions/`, `/context/`, `/.../`,
+  `/Users/jm/.../`). Extraction now lives in `core/context/dir_evidence.py` and
+  requires three things the old code lacked: structural validity (no `...`,
+  `..`, or doubled separators), a real resolution base (a relative path is
+  never promoted to a root-level path), and **existence** (`os.path.isdir`).
+  The trailing-slash regex also dropped the final segment, which is
+  usually the directory actually being discussed
+  (`/Users/jm/Documents/github/komper` reported as its parent).
+- Entries whose directory no longer exists are pruned from the session's list
+  before the block is built (`prune_session_directories`), so long sessions do
+  not accumulate dead scratch paths. Elevated (deliberately granted) entries
+  are never pruned.
+- **`ADDITIONAL_DIRS` entries are normalised.** `"a, b"` (comma + space) left a
+  leading space on every entry after the first, which made it non-absolute and
+  non-existent, so the entry disappeared silently. Entries are now stripped and
+  `~` is expanded. Relative entries are still kept verbatim rather than
+  resolved against an unrelated process cwd.
+
+### Changed
+- **Orientation and the repo map are injected once per session** (start and
+  resume) instead of every turn. Both describe things that do not change
+  mid-session; re-sending identical text each turn cost tokens, and re-building
+  the map re-scanned the repository on every message. They are cached per
+  session and rebuilt when a new session begins, which also re-resolves the
+  repository root. Per-turn context still carries what varies: retrieved memory
+  and the skills nudge.
+
+### Added
+- **`ADDITIONAL_DIRS` entries are validated, and refusals are explained**
+  (`core/context/dir_validation.py`). Previously a malformed entry was skipped
+  by whichever consumer reached it first, so the operator believed a directory
+  was available while the agent quietly could not see it. Entries are now
+  checked once at import, in this order: format (non-empty, no shell/glob
+  characters), absolute, depth, existence (a warning, not a refusal). Refused:
+  relative paths, `/`, the home directory, shell fragments, duplicates. The
+  accept-list is computed in one place, so the Claude allow-list, the AgentDB
+  workspace snapshot and the orientation block cannot disagree. Both bots print
+  the reason for every refused or dangling entry at startup.
+- **Orientation block on every turn** (`core/context/orientation.py`). The
+  open-model runners now tell the agent where it is: a `## Your starting
+  directory` block naming the session workspace and stating that it is a
+  scratch directory, normally empty and normally not the project under
+  discussion. When `ADDITIONAL_DIRS` is set, a second, separately-titled
+  `## Additional directories available to you` block lists those paths and says
+  explicitly that a listed path does not override the user's instruction for
+  the current task. Keeping the two blocks apart prevents the failure where an
+  agent starts work in a listed repository instead of the one the user named.
+  Built independently of AgentDB, so it survives `AGENTDB_ENABLED=false`.
+
+### Documentation
+- README: new **"Repo map and `ADDITIONAL_DIRS`"** section — what the map is and
+  is not, why the session workspace is not your repository, why
+  `ADDITIONAL_DIRS` should point at narrow per-project absolute paths (not a
+  parent folder such as `$HOME`), the path-format rules, and how to preview the
+  map before enabling it.
+
 ## [0.1.0] — 2026-11-20
 
 ### Added

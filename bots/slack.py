@@ -341,6 +341,10 @@ async def main(backend: str = "claude", model: str | None = None):
     print(f"[startup] User allowlist: {platform.allowed_user_ids or 'OPEN TO ALL (set ALLOWED_SLACK_USER_IDS)'}")
     print(f"[startup] Admin allowlist: {platform.admin_user_ids or 'NONE (set ADMIN_SLACK_USER_IDS)'}")
     print(f"[startup] Additional dirs: {config.ADDITIONAL_DIRS or 'none'}")
+    # A refused or dangling entry is otherwise invisible: the directory simply
+    # never reaches the agent. Say why, once, at startup.
+    for _line in config.additional_dirs_report():
+        print(f"[startup] {_line}")
     print(f"[startup] Approval timeout: {config.APPROVAL_TIMEOUT_SECONDS}s")
 
     async def notify(channel, thread_id, text):

@@ -410,6 +410,10 @@ async def main(backend: str = "claude", model: str | None = None, bot_name: str 
     print(f"[startup] User allowlist: {TELEGRAM_PLATFORM.allowed_user_ids or f'OPEN TO ALL (set {allowed_hint})'}")
     print(f"[startup] Admin allowlist: {TELEGRAM_PLATFORM.admin_user_ids or f'NONE (set {admin_hint})'}")
     print(f"[startup] Additional dirs: {config.ADDITIONAL_DIRS or 'none'}")
+    # A refused or dangling entry is otherwise invisible: the directory simply
+    # never reaches the agent. Say why, once, at startup.
+    for _line in config.additional_dirs_report():
+        print(f"[startup] {_line}")
     print(f"[startup] Approval timeout: {config.APPROVAL_TIMEOUT_SECONDS}s")
 
     application = Application.builder().token(token).concurrent_updates(True).build()
