@@ -75,6 +75,31 @@ AGENTGATE_SKILLS_MANIFEST_TOKENS=600          # cap on the injected manifest
 AGENTGATE_SKILLS_SELECTION_MODE=model         # model | recommend (Mode B)
 ```
 
+### Where the catalog lives
+
+`AGENTGATE_SKILLS_DIR` accepts any path, not just one inside this repository —
+a shared team folder is a supported setup:
+
+```env
+AGENTGATE_SKILLS_DIR=/opt/team/skills         # absolute: the clearest form
+AGENTGATE_SKILLS_DIR=~/agent-skills           # `~` is expanded to your home
+AGENTGATE_SKILLS_DIR=skills                   # relative: resolved from the CWD
+```
+
+A relative value is resolved against the **process working directory**, not the
+repository root, so it means different things depending on where the bot was
+launched. That is fine for `python run.py` from the checkout, and fragile under
+a service manager that sets its own `WorkingDirectory`. The startup line always
+names the directory that was actually used, so this is visible rather than
+inferred:
+
+```
+[startup] Skills: 3 available (milestone-implement, ...), mode 'model', dir /opt/team/skills
+```
+
+An unrecognised `AGENTGATE_SKILLS_SELECTION_MODE` falls back to `model` and is
+reported on its own line, as is any skill excluded during discovery.
+
 ### Activation modes
 
 | Mode | Setting | Behavior |

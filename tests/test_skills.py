@@ -3,6 +3,7 @@
 These tests exercise real behavior (catalog discovery, tool handlers, session
 state, outgoing messages), and assert that the disabled path is unchanged.
 """
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -333,3 +334,79 @@ def test_bots_report_skills_at_startup():
             __import__(module_path.replace("/", ".")[:-3], fromlist=["x"])
         )
         assert "skills_startup_report(" in source, f"{module_path} does not report skills"
+
+
+# -- skills directory resolution -------------------------------------------
+
+
+def test_home_relative_skills_dir_is_expanded():
+    """`~/agent-skills` is how people point at a shared folder outside the repo.
+
+    Path does not expand `~`, so without this the literal directory
+    `~/agent-skills` is looked for and not found — an empty catalog that reads
+    as "no skills configured".
+    """
+    from core.skills.catalog import resolve_skills_dir
+
+    expanded = resolve_skills_dir("~/agent-skills")
+    assert expanded == os.path.join(os.path.expanduser("~"), "agent-skills")
+    assert "~" not in expanded
+
+
+def test_absolute_skills_dir_is_unchanged():
+    from core.skills.catalog import resolve_skills_dir
+
+    assert resolve_skills_dir("/opt/team/skills") == "/opt/team/skills"
+
+
+def test_relative_skills_dir_stays_relative():
+    """Relative stays relative: the startup report says what it resolved to."""
+    from core.skills.catalog import resolve_skills_dir
+
+    assert resolve_skills_dir("skills") == "skills"
+
+
+def test_empty_skills_dir_is_passed_through():
+    from core.skills.catalog import resolve_skills_dir
+
+    assert resolve_skills_dir(None) is None
+    assert resolve_skills_dir("") == ""
+
+
+def test_home_relative_dir_finds_a_real_catalog(tmp_path, monkeypatch):
+    """End to end: an expanded `~` path actually discovers skills."""
+    from core.skills import build_skills_context
+
+    home = tmp_path / "home"
+    skill = home / "agent-skills" / "my-skill"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: my-skill\ndescription: a shared skill\n---\nbody\n"
+    )
+    monkeypatch.setenv("HOME", str(home))
+
+    ctx = build_skills_context(enabled=True, skills_dir="~/agent-skills",
+                               manifest_tokens=600, selection_mode="model")
+    assert [e.name for e in ctx.catalog.entries] == ["my-skill"]
+
+
+def test_startup_report_names_the_resolved_directory():
+    """A relative setting must not be ambiguous at startup."""
+    from core.skills import build_skills_context, skills_startup_report
+
+    ctx = build_skills_context(enabled=True, skills_dir="skills",
+                               manifest_tokens=600, selection_mode="model")
+    joined = "\n".join(skills_startup_report(ctx))
+    assert "dir" in joined
+    assert os.path.abspath("skills") in joined
+
+
+def test_missing_directory_diagnostic_names_the_full_path():
+    """'not found' is only actionable if the operator sees where it looked."""
+    from core.skills import build_skills_context, skills_startup_report
+
+    ctx = build_skills_context(enabled=True, skills_dir="definitely-not-here-xyz",
+                               manifest_tokens=600, selection_mode="model")
+    joined = "\n".join(skills_startup_report(ctx))
+    assert "definitely-not-here-xyz" in joined
+    assert os.path.abspath("definitely-not-here-xyz") in joined

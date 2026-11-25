@@ -33,6 +33,14 @@ project's release practice.
   diagnostic, in the same shape as `ADDITIONAL_DIRS` reporting. A typo such as
   `AGENTGATE_SKILLS_SELECTION_MODE=recomend` previously ran Mode A with no
   indication at all.
+- **`AGENTGATE_SKILLS_DIR` now expands `~`, and the resolved directory is
+  reported at startup.** A shared catalog outside the repository
+  (`~/agent-skills`) is a normal setup, but `Path` does not expand `~`, so the
+  literal directory was looked for, not found, and the catalog came back empty —
+  indistinguishable from "no skills configured". The directory used is now named
+  on the startup line (`..., dir /opt/team/skills`), so a relative setting
+  resolved against the process CWD is visible rather than inferred, and a
+  not-found diagnostic names the full path that was tried.
 - **The repo map is injected once per session, as documented — not every turn.**
   The cache added earlier avoided rebuilding the map but not re-*sending* it:
   the text was written into a turn-local variable on every turn. Scope is now

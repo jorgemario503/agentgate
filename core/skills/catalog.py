@@ -280,6 +280,27 @@ def _fingerprint_bytes(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def resolve_skills_dir(skills_dir: "str | os.PathLike | None") -> "str | None":
+    """Expand ``~`` so an operator can point at a shared folder.
+
+    A skills catalog is often shared outside this repository
+    (``~/agent-skills``, a team mount). ``Path`` does not expand ``~`` itself, so
+    without this the literal directory ``~/agent-skills`` is looked for and not
+    found — a silently empty catalog that looks like "no skills configured".
+
+    Absolute paths are returned unchanged; relative paths stay relative (they are
+    resolved against the process CWD by ``discover``, and the startup report
+    prints what that resolved to).
+    """
+    if not skills_dir:
+        return skills_dir
+    try:
+        text = os.fspath(skills_dir)
+    except TypeError:
+        return skills_dir
+    return os.path.expanduser(text)
+
+
 def discover(skills_dir: str | os.PathLike | None) -> Catalog:
     """Build an immutable catalog from an operator-configured directory.
 
@@ -292,9 +313,12 @@ def discover(skills_dir: str | os.PathLike | None) -> Catalog:
         return EMPTY_CATALOG
     root = Path(skills_dir)
     if not root.exists():
-        return Catalog((), None, "", (f"skills dir not found: {root.name}",))
+        # The full path, not just the basename: "not found" is only actionable
+        # if the operator can see WHERE it was looked for, and a path that is
+        # missing cannot leak a skill body.
+        return Catalog((), None, "", (f"skills dir not found: {os.path.abspath(root)}",))
     if not root.is_dir():
-        return Catalog((), None, "", (f"skills dir is not a directory: {root.name}",))
+        return Catalog((), None, "", (f"skills dir is not a directory: {os.path.abspath(root)}",))
 
     try:
         root_resolved = root.resolve(strict=True)
@@ -548,6 +572,9 @@ class SkillsContext:
     #: What the operator asked for, kept so a fallback can be reported rather
     #: than silently applied. Empty when skills are disabled.
     requested_mode: str = ""
+    #: The directory discovery actually used, after ``~`` expansion and CWD
+    #: resolution. Reported at startup so a relative setting is never ambiguous.
+    resolved_dir: str = ""
 
 
 def build_skills_context(
@@ -566,6 +593,8 @@ def build_skills_context(
     if not enabled:
         return SkillsContext(False, EMPTY_CATALOG, "", selection_mode, (),
                             requested_mode=selection_mode or "")
+    skills_dir = resolve_skills_dir(skills_dir)
+    _resolved = os.path.abspath(skills_dir) if skills_dir else ""
     try:
         catalog = discover(skills_dir)
     except Exception as e:  # discovery is written not to raise; never take the runner down
@@ -573,18 +602,21 @@ def build_skills_context(
             False, EMPTY_CATALOG, "", selection_mode,
             (f"skill discovery failed: {e.__class__.__name__}",),
             requested_mode=selection_mode or "",
+            resolved_dir=_resolved,
         )
     if not catalog.entries:
         # No usable skills: behave exactly as disabled.
         return SkillsContext(
             False, catalog, "", selection_mode, catalog.diagnostics,
             requested_mode=selection_mode or "",
+            resolved_dir=_resolved,
         )
     manifest = build_manifest(catalog, max_tokens=manifest_tokens)
     mode = selection_mode if selection_mode in ("model", "recommend") else "model"
     return SkillsContext(
         True, catalog, manifest, mode, catalog.diagnostics,
         requested_mode=selection_mode or "",
+        resolved_dir=_resolved,
     )
 
 
@@ -608,9 +640,11 @@ def skills_startup_report(context: "SkillsContext") -> list[str]:
         return []
 
     lines: list[str] = []
+    _where = f", dir {context.resolved_dir}" if context.resolved_dir else ""
     lines.append(
         f"Skills: {len(context.catalog.entries)} available "
-        f"({', '.join(e.name for e in context.catalog.entries)}), mode '{context.mode}'"
+        f"({', '.join(e.name for e in context.catalog.entries)}), "
+        f"mode '{context.mode}'{_where}"
     )
 
     # An unrecognised selection mode silently becomes "model". Say so rather than
