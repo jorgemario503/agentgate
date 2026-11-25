@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
 import core.approvals as approvals
+from core.sessions import idle_notified_at
 from runners.base import PlatformConfig
 
 if TYPE_CHECKING:
@@ -72,11 +73,14 @@ async def session_status_reply(thread_id: str, session_store) -> str:
     if not meta:
         return "🔴 No active session."
     idle = time.time() - meta["last_activity"]
-    live = (
-        "🟢 client connected"
-        if runner.has_client(thread_id)
-        else "🟡 will resume from saved session on next message"
-    )
+    if runner.has_client(thread_id):
+        live = "🟢 client connected"
+    elif idle_notified_at(meta) is not None:
+        # Presentation only: the reaper closed this session and said so. The
+        # session state is an ordinary resume either way.
+        live = "⏰ went idle, told to resume on next message"
+    else:
+        live = "🟡 will resume from saved session on next message"
     return f"Session active — idle {idle / 60:.0f}m — {live}"
 
 

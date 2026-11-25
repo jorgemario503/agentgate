@@ -43,7 +43,10 @@ import uvicorn
 import core.approvals as approvals
 import core.commands as commands
 import core.config as config
-from core.sessions import SessionStore, classify_session, wants_claude_settings
+from core.skills import skills_context_from_config, skills_startup_report
+from core.sessions import (
+    SessionStore, classify_session, idle_notified_at, wants_claude_settings,
+)
 from runners.base import PlatformConfig, TaskInterrupted, check_blocked
 
 PORT = int(os.environ.get("WHATSAPP_LINKED_PORT", 8081))
@@ -138,6 +141,7 @@ async def _start_wppconnect_session():
 # Core flow
 # ---------------------------------------------------------------------------
 
+
 async def _run_and_reply(phone: str, prompt: str, workspace_path: str, resume_session_id: str | None):
     thread_id = phone
 
@@ -189,15 +193,21 @@ async def handle_message(phone: str, text: str):
         return
 
     meta = _whatsapp_store.get_session_meta(thread_id)
-    if meta and not meta.get("expired"):
+    # A row that exists is resumable. Whether the reaper notified the user
+    # about idleness is presentation, not lifecycle: it must not push
+    # this turn into the start path and discard the saved session id.
+    if meta:
         _whatsapp_store.touch_session(thread_id)
         await _run_and_reply(phone, text, meta["workspace_path"], meta.get("session_id"))
         return
 
     # Derived from registry state, not session_id: the stateless runners
     # keep session_id unset or equal to thread_id, so it cannot tell a
-    # resume from a fresh start.
-    start_msg = classify_session(meta, False).opener
+    # resume from a fresh start. Reaching here means the registry has no
+    # live row, so this is a boundary: start or resume.
+    start_msg = classify_session(
+        meta, False,
+    ).opener(idle_notified=idle_notified_at(meta) is not None)
     await send_whatsapp(
         phone,
         f"{start_msg}...\nWhen the agent needs permission (e.g. git commit), reply `yes` or `no`.",
@@ -267,6 +277,9 @@ async def lifespan(app: FastAPI):
     # never reaches the agent. Say why, once, at startup. Same line as the
     # Slack and Telegram banners, so the three platforms report config alike.
     for _line in config.additional_dirs_report():
+        print(f"[startup] {_line}")
+    # Skills fail quietly on purpose; report the resolved configuration once.
+    for _line in skills_startup_report(skills_context_from_config(config)):
         print(f"[startup] {_line}")
 
     yield

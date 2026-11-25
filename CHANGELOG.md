@@ -6,7 +6,104 @@ project's release practice.
 
 ## [Unreleased]
 
+### Added
+- **AgentDB memory is scoped per asset, not per retrieval call.** One
+  `prepare_turn_async()` returns every family at once, so the previous code
+  treated them all as per-turn content and a turn could receive five compaction
+  checkpoint stubs and no actual memory. Each family now has a declared scope,
+  classified from the record key — the store's `kind` column is `source` for
+  every row, so it cannot distinguish a checkpoint from an episodic fact:
+
+  | Family | Scope |
+  |---|---|
+  | `memory/episodic/`, `memory/canonical/` | every turn — they answer the question |
+  | `memory/compaction/summary/<sid>` | session resume — a handover note for a process that lost the transcript |
+  | `memory/compaction/checkpoint/<sid>` | **never** — a tombstone with no content |
+
+  Checkpoints are declared `NEVER` rather than dropped silently, so the table
+  says what happens to them. Verified against a real store: all 16 checkpoint
+  rows held only `{"session_id": ..., "type": "checkpoint"}`.
+
+### Removed
+- **`skills/example-summarize/`** — a sample template that nobody invoked. It had
+  no `metadata.agentgate.triggers`, so Mode B could never surface it, and it
+  listed as an available skill in every session's manifest. Kept in
+  `_archive/skills-legacy/` rather than deleted. The three role skills remain.
+
+### Added
+- **`core/injection.py` — turn context has a declared owner and a declared
+  scope.** Three copies of the same assembly lived in the open-model runners and
+  had drifted from the documented behaviour. They now emit `Injection` values
+  carrying a `source` (`agentgate` or `agentdb`), an `asset`, and a scope from
+  `SESSION_START` / `SESSION_RESUME` / `SESSION_BOUNDARY` / `EVERY_TURN`, and one
+  `build_turn_injections()` assembles them. `ASSET_SCOPES` is the reviewable
+  table of what is injected when, and constructing an asset with a scope that
+  contradicts it raises rather than letting the table become a lie.
+
 ### Fixed
+- **A misconfigured skills setup is now visible at startup.** Skills fail quietly
+  by design — an invalid `SKILL.md` is excluded, an unrecognised
+  `AGENTGATE_SKILLS_SELECTION_MODE` falls back to `model`, a missing directory
+  yields an empty catalog — which is right for a request path but leaves the
+  operator unable to see that their configuration did not take effect. All three
+  bots now print the resolved catalog and mode once at startup, plus a warning
+  when the selection mode was not recognised and any per-skill discovery
+  diagnostic, in the same shape as `ADDITIONAL_DIRS` reporting. A typo such as
+  `AGENTGATE_SKILLS_SELECTION_MODE=recomend` previously ran Mode A with no
+  indication at all.
+- **`AGENTGATE_SKILLS_DIR` now expands `~`, and the resolved directory is
+  reported at startup.** A shared catalog outside the repository
+  (`~/agent-skills`) is a normal setup, but `Path` does not expand `~`, so the
+  literal directory was looked for, not found, and the catalog came back empty —
+  indistinguishable from "no skills configured". The directory used is now named
+  on the startup line (`..., dir /opt/team/skills`), so a relative setting
+  resolved against the process CWD is visible rather than inferred, and a
+  not-found diagnostic names the full path that was tried.
+- **The repo map is injected once per session, as documented — not every turn.**
+  The cache added earlier avoided rebuilding the map but not re-*sending* it:
+  the text was written into a turn-local variable on every turn. Scope is now
+  consulted *before* the producer runs, so a warm turn neither builds nor sends
+  the map, the orientation blocks, or the repo-history read that feeds root
+  resolution.
+- **Retrieved memory no longer erases the repo map, and vice versa.** Assembly
+  used one `memory_context` variable, so with AgentDB enabled the map was
+  silently discarded and with it disabled the map was sent on every turn. Both
+  wrong, neither visible. Producers now compose under their own headings.
+- **The map describes the session's repository, not the operator's first
+  `ADDITIONAL_DIRS` entry.** Candidates are now paths the session's own turns
+  named that exist on disk (plus the workspace when it is itself a repo).
+  Passing `ADDITIONAL_DIRS` wholesale made the first entry win, so a session
+  working in one project received a ~1,500-token map of another — delivered with
+  full confidence, and impossible for a model to recognise as wrong. When the
+  session has no evidence, no map is injected.
+- **Compaction checkpoint stubs are no longer injected as turn memory.** A
+  retrieval pass returns `memory/compaction/checkpoint/<sid>` records alongside
+  query-relevant ones, so a turn could receive the same stub several times and
+  nothing else. Session-scoped records are separated from per-turn memory, and
+  duplicate records are collapsed.
+
+### Changed
+- **Session states are now exactly three, and the idle reaper no longer invents
+  one.** `NEW`/`WARM`/`COLD`/`RESUME_AFTER_TIMEOUT` are now
+  `SESSION_START`/`SESSION_WARM`/`SESSION_RESUME`; `RESUME_AFTER_TIMEOUT` is
+  gone. The reaper's only lifecycle effect is closing the client, which
+  `has_client=False` already reports, so a row it flagged classifies as an
+  ordinary `SESSION_RESUME`. Whether the user was *told* about the idleness is
+  presentation, stored separately as `idle_notified_at` (read-compatible with
+  rows written by an older process, which used `"expired": true`), and it now
+  selects only the opener text: `⏰ Session went idle — resuming`. The overloaded
+  `state.resumes` property is replaced by `state.is_boundary`, which means what
+  the injection layer needs ("start or resume"), and `opener` takes
+  `idle_notified=` rather than being a property. No behaviour change to what is
+  injected, and the Claude runner is untouched.
+
+### Fixed
+- **A session that had gone idle could lose its saved session id.** The bots
+  gated the resume path on `meta and not meta.get("expired")`, so once the
+  reaper had notified the user, the next message fell through to the *start*
+  path, re-registered the row and discarded `resume_session_id` — the SDK UUID
+  on Claude. A row that exists is resumable; the notification flag is
+  presentation and no longer gates the branch.
 - **The repo map no longer describes the wrong repository.** `find_repo_root`
   walked up from the session workspace to the nearest `.git`, and session
   workspaces live at `agent-sessions/<platform>/<thread>/workspace` — inside

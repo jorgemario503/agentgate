@@ -98,15 +98,23 @@ and Python classes/functions with `file:line` and signatures. It is added as
 turn), so the cacheable system-prompt prefix is not disturbed.
 
 It is injected **once per session, not per turn**. The map is near-static, so
-re-sending it every turn would spend tokens on identical text and re-scan the
-repository on every message; it is rebuilt only when a new session begins.
+re-sending it every turn would spend the budget on identical text and re-scan the
+repository on every message. The scope is declared in `core/injection.py` and
+consulted *before* the producer runs, so a warm turn does not scan at all.
 
-- **Rooted on evidence, not ancestry:** the session workspace is a scratch dir
-  that usually sits inside some other checkout, so walking up from it finds the
-  wrong repository. The root comes from a validated `ADDITIONAL_DIRS` entry
-  inside a repository, else the workspace when it is not nested. When nothing
-  resolves to a repository, **no map is injected** — a wrong map is worse than
-  no map, because the model cannot tell the difference.
+- **Rooted on session evidence:** the session workspace is a scratch dir that
+  usually sits inside some other checkout, so walking up from it finds the wrong
+  repository. The root comes from paths *this session* named that exist on disk,
+  plus the workspace when it is not nested. `ADDITIONAL_DIRS` is not evidence —
+  it is the operator's registry, and treating it as evidence made the first entry
+  win, which is how a session working in one project received a map of another.
+  When nothing resolves to a repository, **no map is injected** — a wrong map is
+  worse than no map, because the model cannot tell the difference.
+- **Scoped, not place-dependent:** `core/injection.py` declares the scope of each
+  context asset. The map and the orientation block are session-boundary assets,
+  so a warm turn neither builds nor sends them; retrieved memory is a per-turn
+  asset and still is. The declaration also stops the two from overwriting each
+  other, which a single shared variable allowed.
 - **Safe scanning:** root-confined, honours `.gitignore` plus a default deny
   list (VCS dirs, `.env`/key/credential files, vendored deps, build output,
   caches, binaries). Oversize and binary files are skipped, not guessed. Project

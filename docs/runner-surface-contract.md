@@ -91,14 +91,19 @@ These change freely and the orchestrator must not import them:
 Shipping `runners/` requires their `core/` dependencies. Measured from the source (not assumed):
 
 `config`, `providers`, `sessions`, `history`, `agentdb`, `prompts`, `approvals`, `commands`,
-`tools`, `skills`, `reasoning`, `context`, `tool_policy`
+`tools`, `skills`, `reasoning`, `context`, `injection`, `tool_policy`
 
-Thirteen modules, plus `core.handoff` — which is a **separate** published contract (DEC-108) and may
+Fourteen modules, plus `core.handoff` — which is a **separate** published contract (DEC-108) and may
 be imported directly.
 
 Note `context` covers what used to be four flat modules; the M1 grouping moved `artifacts`,
 `cache_key`, `tool_pipeline` and `tool_compression` inside it. The orchestrator does not name
 either shape — it gets them transitively.
+
+`injection` was added when turn-context assembly moved out of the three open-model runners into one
+module. It declares which producer contributes which context, and at what scope (session boundary
+or every turn). It is a runner dependency, not part of the handoff wire contract, and the
+orchestrator does not name it.
 
 ### 3.2 Third-party dependencies the orchestrator inherits
 

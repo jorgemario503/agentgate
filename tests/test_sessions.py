@@ -25,11 +25,17 @@ def test_update_session_id(store):
     assert store.get_session_meta("t1")["session_id"] == "abc-123"
 
 
-def test_expire_session_preserves_session_id(store):
+def test_mark_idle_notified_preserves_session_id(store):
+    """Recording that the user was told preserves the saved session id.
+
+    The marker replaced the old `expired` boolean; either way the row survives
+    so the next turn can resume rather than start over.
+    """
     store.register_session("t1", "ch1", "/ws/t1", session_id="saved-id")
-    store._expire_session("t1")
+    store.mark_idle_notified("t1")
     meta = store.get_session_meta("t1")
-    assert meta["expired"] is True
+    assert "expired" not in meta
+    assert store.idle_notified_at("t1") is not None
     assert meta["session_id"] == "saved-id"
 
 

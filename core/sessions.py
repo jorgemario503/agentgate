@@ -1,6 +1,45 @@
 """
 Session registry (persisted to disk), per-thread workspace setup,
 Claude settings writer, and the idle-session reaper.
+
+Session identity — the one thing to understand before reading further
+--------------------------------------------------------------------
+There are three different identifiers in play and they are not interchangeable.
+
+**Address** (``thread_id``) — where the conversation lives. It is produced by
+the bot, not by the agent, and it is *not* a session:
+
+============================  =========================================
+Slack                          ``thread_ts or ts`` — new thread, new address
+Telegram                       ``str(chat_id)`` — one address per chat, forever
+WhatsApp                       ``phone`` — one address per phone, forever
+============================  =========================================
+
+The address is the durable key: history files, workspaces, AgentDB records and
+the provider cache key are all named after it.
+
+**Session** — one continuous conversation *in a process*. For the open-model
+runners the session id **is** the address (they pass ``thread_id`` straight
+through), so the only thing that distinguishes a new session from a later turn
+is whether this process still holds a client for that address. For Claude the
+SDK mints a real UUID and ``resume=`` carries it back.
+
+**Provider cache key** — ``core.context.cache_key`` sends the address as
+DeepInfra's ``prompt_cache_key`` / Fireworks' ``x-session-affinity`` on *every*
+message. Because the address is permanent for Telegram and WhatsApp, so is the
+cache lineage there: a new session mutates the prefix of an existing lineage
+rather than starting a fresh one. That is why per-session text must travel in
+the ephemeral context and never in the cached system prefix.
+
+Session states
+--------------
+A session state answers exactly one question: **does this turn stand at a
+session boundary, or inside one?** It is derived from the registry row plus
+whether this process holds a live client. It is deliberately *not* influenced by
+the idle reaper — going idle closes a client, which is a fact about this process
+and is already visible as "no client". Whether the user was *told* about it is
+presentation, not lifecycle, and is carried separately by
+``SessionStore.idle_notified_at``.
 """
 import asyncio
 import json
@@ -20,38 +59,57 @@ from core.config import (
 # In-memory only: resets on restart, like auto-approval.
 _keep_alive: set[str] = set()
 
+#: Registry key recording *when* the reaper last told the user a session went
+#: idle. Presentation only: no session state or injection decision reads it.
+#: Rows written before this rename said ``"expired": true``; both are accepted.
+IDLE_NOTIFIED_KEY = "idle_notified_at"
+_LEGACY_EXPIRED_KEY = "expired"
+
 
 class SessionState(Enum):
-    """How a thread relates to the session it may resume.
+    """Where a turn sits relative to the session it belongs to.
 
-    The classification answers one question: should this turn inject a resume
-    prompt? It is derived from the registry entry plus whether *this process*
-    still holds a live client — never from the session id, because the
-    non-Claude runners always pass `thread_id` as the session id and so cannot
-    distinguish a resume from a fresh start.
+    Exactly three states, because there are exactly two lifecycle facts that
+    change what a turn needs: whether a session is starting, and whether this
+    process still has it open.
 
-    `opener` is the one-line status shown to the user when a session starts;
-    it is derived from the state so the two cannot drift.
+    ``SESSION_START`` covers a first-ever message *and* the first message after
+    ``/stop``: the registry row is removed by ``/stop``, so the two are the same
+    fact from the registry's point of view. They are the same state on purpose —
+    both need a full context injection and the same opener.
+
+    ``SESSION_RESUME`` covers a row that still exists while this process holds no
+    client. That happens on a process restart, and after a turn failed and the
+    runner closed its client. Both mean the same thing to a turn: prior context
+    exists and must be re-supplied.
     """
 
-    NEW = "new"
-    WARM = "warm"
-    COLD = "cold"
-    RESUME_AFTER_TIMEOUT = "resume_after_timeout"
+    SESSION_START = "session_start"
+    SESSION_RESUME = "session_resume"
+    SESSION_WARM = "session_warm"
 
     @property
-    def resumes(self) -> bool:
-        """True when the model has prior context this process must re-supply."""
-        return self in (SessionState.COLD, SessionState.RESUME_AFTER_TIMEOUT)
+    def is_boundary(self) -> bool:
+        """True at a session start or resume — the only time to inject
+        per-session context (repo map, orientation, resume block).
 
-    @property
-    def opener(self) -> str:
-        """User-facing status line; empty for WARM (already connected)."""
-        if self is SessionState.WARM:
+        ``SESSION_WARM`` is a later turn inside an open session; per-session
+        context was already delivered on the turn that opened it.
+        """
+        return self is not SessionState.SESSION_WARM
+
+    def opener(self, *, idle_notified: bool = False) -> str:
+        """User-facing status line; empty for a warm turn (already connected).
+
+        ``idle_notified`` distinguishes "we closed your idle session and told
+        you so" from other resumptions. It is a parameter rather than part of
+        the state so that a notification can never change what gets injected.
+        """
+        if self is SessionState.SESSION_WARM:
             return ""
-        if self.resumes:
-            return "🔄 Resuming session"
-        return "🚀 Starting agent session"
+        if self is SessionState.SESSION_START:
+            return "🚀 Starting agent session"
+        return "⏰ Session went idle — resuming" if idle_notified else "🔄 Resuming session"
 
 
 def classify_session(meta: Optional[dict], has_client: bool) -> SessionState:
@@ -60,16 +118,31 @@ def classify_session(meta: Optional[dict], has_client: bool) -> SessionState:
     `meta` is the registry entry (None when the thread was never registered or
     was removed by `/stop`); `has_client` is `runner.has_client(thread_id)`.
 
-    An expired row outranks a live client: the reaper decided this session was
-    over, and its history must be re-injected even if a stale client lingers.
+    Note what is *absent* from this function: the idle marker. A row the reaper
+    has flagged classifies exactly like any other row without a client, because
+    the reaper's only lifecycle effect is already captured by ``has_client``.
     """
     if not meta:
-        return SessionState.NEW
-    if meta.get("expired"):
-        return SessionState.RESUME_AFTER_TIMEOUT
+        return SessionState.SESSION_START
     if has_client:
-        return SessionState.WARM
-    return SessionState.COLD
+        return SessionState.SESSION_WARM
+    return SessionState.SESSION_RESUME
+
+
+def idle_notified_at(meta: Optional[dict]) -> Optional[float]:
+    """When the reaper last notified the user this session went idle, if ever.
+
+    Reads the current key and the legacy ``expired`` boolean, so rows written by
+    an older process keep their meaning. A legacy ``expired`` row records no
+    timestamp, so its ``last_activity`` stands in for one.
+    """
+    if not meta:
+        return None
+    if IDLE_NOTIFIED_KEY in meta:
+        return meta.get(IDLE_NOTIFIED_KEY)
+    if meta.get(_LEGACY_EXPIRED_KEY):
+        return meta.get("last_activity")
+    return None
 
 
 
@@ -144,13 +217,33 @@ class SessionStore:
         registry.pop(thread_id, None)
         self.save_registry(registry)
 
-    def _expire_session(self, thread_id):
-        """Mark a session as expired but retain session_id for future resumption."""
+    def mark_idle_notified(self, thread_id, when: Optional[float] = None):
+        """Record that the user was told this session went idle.
+
+        Purely informational: it drives the opener text and `/session status`.
+        It does not change the session state — the reaper closed the client,
+        and "no client" already says everything the lifecycle needs.
+
+        Rewrites the row in the current shape, so a legacy ``expired`` flag is
+        migrated away the first time this runs.
+        """
         registry = self.load_registry()
-        if thread_id in registry:
-            registry[thread_id]["expired"] = True
-            registry[thread_id]["last_activity"] = time.time()
-            self.save_registry(registry)
+        meta = registry.get(thread_id)
+        if meta is None:
+            return
+        meta.pop(_LEGACY_EXPIRED_KEY, None)
+        meta[IDLE_NOTIFIED_KEY] = when if when is not None else time.time()
+        meta["last_activity"] = time.time()
+        registry[thread_id] = meta
+        self.save_registry(registry)
+
+    def idle_notified_at(self, thread_id) -> Optional[float]:
+        """When the reaper last notified this thread, or None."""
+        return idle_notified_at(self.get_session_meta(thread_id))
+
+    # Retained as a thin alias: the reaper's method name is part of its call
+    # shape in existing tests and subclasses.
+    _expire_session = mark_idle_notified
 
     def get_session_meta(self, thread_id) -> dict | None:
         return self.load_registry().get(thread_id)
@@ -230,11 +323,14 @@ class SessionStore:
                 idle = now - meta["last_activity"]
                 if idle > IDLE_TIMEOUT_SECONDS:
                     print(f"[reaper] Expiring session {thread_id} (idle {idle:.0f}s)")
+                    # The lifecycle effect: the client goes away, which is what
+                    # makes the next turn a SESSION_RESUME.
                     try:
                         await close_client_fn(thread_id)
                     except Exception as e:
                         print(f"[reaper] Error closing client {thread_id}: {e}")
-                    self._expire_session(thread_id)
+                    # The presentation effect: remember that the user was told.
+                    self.mark_idle_notified(thread_id)
                     try:
                         await notify_fn(
                             meta["channel"], thread_id,

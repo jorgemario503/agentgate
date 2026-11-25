@@ -479,7 +479,7 @@ async def _run_scenario(scenario, mode, model):
 
     history_path = str(ws / "_history.json")
     system_prompt = prompts.build_system_prompt(
-        state=SessionState.NEW, history_path=history_path, workspace_path=str(ws),
+        state=SessionState.SESSION_START, history_path=history_path, workspace_path=str(ws),
         skills_manifest=ctx.manifest if mode in ("a", "b") else "",
     )
     # Eval-only, applied identically to every mode: make the cwd explicit so the

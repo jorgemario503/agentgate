@@ -119,26 +119,83 @@ backend.
 ### Session state and resume
 
 `core/sessions.py::classify_session(meta, has_client)` decides whether a turn
-needs a resume prompt. The inputs are the registry entry and whether *this
-process* still holds a live client — never the session id, because the
-open-model runners always pass `thread_id` as the session id and so cannot
+stands at a session boundary or inside one. The inputs are the registry entry and
+whether *this process* still holds a live client — never the session id, because
+the open-model runners always pass `thread_id` as the session id and so cannot
 distinguish a resume from a fresh start.
 
 | State | Condition | Prompt |
 |---|---|---|
-| `NEW` | no registry entry | base + hard rules |
-| `WARM` | entry, not expired, client alive | none — history is in RAM |
-| `COLD` | entry, not expired, client gone (bot restart) | base + hard rules + resume |
-| `RESUME_AFTER_TIMEOUT` | entry marked `expired` by the reaper | base + hard rules + resume |
+| `SESSION_START` | no registry entry (first ever, or after `/stop`) | base + hard rules |
+| `SESSION_WARM` | entry, client alive | none — history is in RAM |
+| `SESSION_RESUME` | entry, client gone (process restart, or a failed turn) | base + hard rules + resume |
 
-An expired row outranks a live client. The resume block names the full history
-file, its format and its `role` values (including `tool`), then replays only the
-last two turns — tool output stays on disk rather than in the prompt.
+`SESSION_START` and `SESSION_RESUME` are the two boundary states
+(`state.is_boundary`); per-session context such as the orientation and repo-map
+blocks is injected there and nowhere else.
+
+There is deliberately **no idle-expiry state**. The reaper's lifecycle effect is
+closing the client, which `has_client=False` already reports; a row it flagged
+classifies as `SESSION_RESUME` like any other. Whether the user was *told* about
+the idleness is presentation, recorded separately in `idle_notified_at`, and it
+only selects the opener text (`⏰ Session went idle — resuming`). No state or
+injection decision reads it.
+
+The resume block names the full history file, its format and its `role` values
+(including `tool`), then replays only the last two turns — tool output stays on
+disk rather than in the prompt.
 
 On resume the system prompt is **authoritative**: `apply_system_prompt()`
 replaces slot 0 of the reloaded history rather than skipping it. The saved
 history always begins with the previous process's system message, so inserting
 only when absent silently discarded every freshly built prompt.
+
+### Turn context injection
+
+`core/injection.py` decides what extra context a turn carries. Producers emit
+`Injection` values declaring a `source` (ownership), an `asset`, and a scope;
+`TurnInjections` filters by the turn's session state and composes each block
+under its own heading. Nothing is merged into one string, so no producer can
+silently replace another.
+
+| Source | Asset | Scope |
+|---|---|---|
+| agentgate | `orientation` | session boundary |
+| agentgate | `repo_map` | session boundary |
+| agentgate | `skills_nudge` | every turn |
+| agentdb | `memory_records` | every turn |
+| agentdb | `compaction_summary` | session resume |
+| agentdb | `compaction_checkpoint` | never |
+| agentdb | `workspace` | session boundary |
+| agentdb | `work_context` | every turn |
+
+A **boundary** turn is a session start or resume. Scope is consulted *before* a
+producer runs, not after, because building the repo map walks the repository —
+running it and discarding the result would keep the per-message scan the scope
+exists to prevent.
+
+The output is composed into the *ephemeral* context, which the open-model runners
+insert immediately before the last user message. It never touches
+`messages[0]`, so the cached system prefix stays byte-identical across a session.
+That matters most for Telegram and WhatsApp: their address — and therefore the
+provider cache key — is permanent, so per-session text in the system prompt would
+mutate a long-lived cache lineage at every session start.
+
+AgentDB's assets are split by **what a record describes**, not by which call
+returned it: one retrieval pass mixes all four families. The record key is the
+only reliable classifier — the store's `kind` column is `source` for every row,
+so it cannot tell a compaction checkpoint from an episodic fact.
+
+| Key prefix | Family | Why that scope |
+|---|---|---|
+| `memory/episodic/` | episodic | written about this session's own work; answers a question |
+| `memory/canonical/` | canonical | derived memory, query-relevant by construction |
+| `memory/compaction/summary/<sid>` | handover note | describes the session's past; useful only to a process that lost the transcript |
+| `memory/compaction/checkpoint/<sid>` | tombstone | carries no content — verified against a real store, where all 16 rows were pure `{"type": "checkpoint"}` stubs |
+
+Checkpoints are declared `NEVER` rather than silently dropped, so the table says
+what happens to them. Summaries are `SESSION_RESUME`: repeating a handover note
+on every turn of a live session is the same noise as the stubs.
 
 ### Session-scoped cache keys
 

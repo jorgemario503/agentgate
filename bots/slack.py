@@ -27,7 +27,10 @@ from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 import core.approvals as approvals
 import core.commands as commands
 import core.config as config
-from core.sessions import SessionStore, classify_session, wants_claude_settings
+from core.skills import skills_context_from_config, skills_startup_report
+from core.sessions import (
+    SessionStore, classify_session, idle_notified_at, wants_claude_settings,
+)
 from runners.base import PlatformConfig, TaskInterrupted, check_blocked
 
 CHUNK = 3800  # Slack hard limit is 4000; leave headroom
@@ -263,7 +266,10 @@ def _register_handlers(platform: PlatformConfig):
             return
 
         meta = store.get_session_meta(thread_id)
-        if meta and not meta.get("expired"):
+        # A row that exists is resumable. Whether the reaper notified the user
+        # about idleness is presentation, not lifecycle: it must not push
+        # this turn into the start path and discard the saved session id.
+        if meta:
             store.touch_session(thread_id)
             await _run_and_reply(
                 runner, platform, thread_id, channel, clean_text,
@@ -279,8 +285,11 @@ def _register_handlers(platform: PlatformConfig):
 
         # Derived from registry state, not session_id: the stateless runners
         # keep session_id unset or equal to thread_id, so it cannot tell a
-        # resume from a fresh start.
-        start_msg = classify_session(meta, False).opener
+        # resume from a fresh start. This branch only runs when the registry has
+        # no live row, so the state is a boundary: start or resume.
+        start_msg = classify_session(
+            meta, False,
+        ).opener(idle_notified=idle_notified_at(meta) is not None)
         await _post(
             channel, thread_id,
             f"{start_msg}...\n"
@@ -310,6 +319,7 @@ def _register_handlers(platform: PlatformConfig):
 # ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
+
 
 async def main(backend: str = "claude", model: str | None = None):
     global app, REASONING_BACKEND, REASONING_MODEL
@@ -344,6 +354,10 @@ async def main(backend: str = "claude", model: str | None = None):
     # A refused or dangling entry is otherwise invisible: the directory simply
     # never reaches the agent. Say why, once, at startup.
     for _line in config.additional_dirs_report():
+        print(f"[startup] {_line}")
+    # Skills fail quietly on purpose (an excluded skill or a fallback mode must
+    # never cost a turn), which also hides a misconfiguration. Report once here.
+    for _line in skills_startup_report(skills_context_from_config(config)):
         print(f"[startup] {_line}")
     print(f"[startup] Approval timeout: {config.APPROVAL_TIMEOUT_SECONDS}s")
 

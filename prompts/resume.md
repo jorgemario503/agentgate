@@ -16,8 +16,9 @@
 #   configurable from this file.
 #
 #   This block is injected only when a non-Claude runner resumes a session
-#   whose in-memory client is gone (COLD or RESUME_AFTER_TIMEOUT). It does not
-#   apply to the Claude runner, which resumes through the SDK.
+#   whose in-memory client is gone (SESSION_RESUME). It does not apply to the
+#   Claude runner, which resumes through the SDK, nor to SESSION_START, which
+#   has no prior history to re-supply.
 #
 # PREFIX-CACHE RULE — please preserve it when editing
 #   The resume block sits after the stable base rules and before per-session

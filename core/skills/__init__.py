@@ -35,8 +35,11 @@ from core.skills.catalog import (
     read_skill_body,
     body_matches_fingerprint,
     # context builder
+    SkillsConfig,
     SkillsContext,
     build_skills_context,
+    skills_context_from_config,
+    skills_startup_report,
     # recommendations (Mode B)
     Recommendation,
     recommend,
@@ -64,6 +67,7 @@ __all__ = [
     "parse_skill_file", "discover",
     "estimate_tokens", "build_manifest", "list_line",
     "SkillReadError", "read_skill_body", "body_matches_fingerprint",
+    "SkillsConfig",
     "SkillsContext", "build_skills_context",
     "Recommendation", "recommend", "build_recommendation_nudge",
     "ActiveSkill", "SkillSession",
