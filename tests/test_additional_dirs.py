@@ -51,10 +51,29 @@ class AdditionalDirsParsingTests(unittest.TestCase):
     def test_empty_entries_ignored(self):
         self.assertEqual(_parse("/a,,/b,"), ["/a", "/b"])
 
-    def test_relative_paths_are_not_silently_absolutised(self):
-        # Kept verbatim: the operator gets to see their mistake rather than have
-        # the path resolved against an unrelated process cwd.
-        self.assertEqual(_parse("relative/dir"), ["relative/dir"])
+    def test_relative_paths_are_refused_not_resolved(self):
+        # Refused rather than resolved against an unrelated process cwd; the
+        # report is what tells the operator, so silence is not an option.
+        self.assertEqual(_parse("relative/dir"), [])
+
+    def test_refused_entry_is_reported(self):
+        import core.config as cfg
+
+        with mock.patch.dict(os.environ, {"ADDITIONAL_DIRS": "relative/dir"}):
+            cfg = importlib.reload(cfg)
+            report = cfg.additional_dirs_report()
+        self.assertEqual(cfg.ADDITIONAL_DIRS, [])
+        self.assertEqual(len(report), 1)
+        self.assertIn("relative/dir", report[0])
+        self.assertIn("not an absolute path", report[0])
+
+    def test_clean_entry_reports_nothing(self):
+        import core.config as cfg
+
+        with mock.patch.dict(os.environ, {"ADDITIONAL_DIRS": "/tmp"}):
+            cfg = importlib.reload(cfg)
+            self.assertEqual(cfg.ADDITIONAL_DIRS, ["/tmp"])
+            self.assertEqual(cfg.additional_dirs_report(), [])
 
 
 if __name__ == "__main__":

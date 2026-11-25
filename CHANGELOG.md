@@ -29,6 +29,16 @@ project's release practice.
   resolved against an unrelated process cwd.
 
 ### Added
+- **`ADDITIONAL_DIRS` entries are validated, and refusals are explained**
+  (`core/context/dir_validation.py`). Previously a malformed entry was skipped
+  by whichever consumer reached it first, so the operator believed a directory
+  was available while the agent quietly could not see it. Entries are now
+  checked once at import, in this order: format (non-empty, no shell/glob
+  characters), absolute, depth, existence (a warning, not a refusal). Refused:
+  relative paths, `/`, the home directory, shell fragments, duplicates. The
+  accept-list is computed in one place, so the Claude allow-list, the AgentDB
+  workspace snapshot and the orientation block cannot disagree. Both bots print
+  the reason for every refused or dangling entry at startup.
 - **Orientation block on every turn** (`core/context/orientation.py`). The
   open-model runners now tell the agent where it is: a `## Your starting
   directory` block naming the session workspace and stating that it is a

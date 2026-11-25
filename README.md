@@ -612,11 +612,15 @@ causes the failure this section exists to prevent: an agent that cannot tell
 instead of the one the user named — better-informed than a guess, but still the
 wrong directory.
 
-The second block appears only when at least one **absolute** `ADDITIONAL_DIRS`
-entry exists, so a single-directory setup does not pay for an empty section.
-Both blocks are per-session and therefore travel in the ephemeral per-turn
-context, never in the cached system prefix. They are built regardless of
-`AGENTDB_ENABLED`, so orientation survives with governed memory switched off.
+The second block appears only when at least one **usable** `ADDITIONAL_DIRS`
+entry exists — accepted, or a dangling path that will be used once it appears —
+so a single-directory setup does not pay for an empty section. Entries that fail
+validation (relative, a filesystem root, your home directory, shell fragments)
+are refused before they reach this block, with the reason printed at startup;
+see *Do `ADDITIONAL_DIRS` entries have to be full paths?* below. Both blocks are
+per-session and therefore travel in the ephemeral per-turn context, never in the
+cached system prefix. They are built regardless of `AGENTDB_ENABLED`, so
+orientation survives with governed memory switched off.
 
 ### Why `ADDITIONAL_DIRS` matters for it
 
@@ -664,20 +668,41 @@ resolve against an unrelated location and quietly point at the wrong tree (or at
 nothing). Absolute paths mean the same thing from every runner and every
 session.
 
-What AgentGate does, and does not, do with the value:
+What AgentGate accepts, and what it refuses:
 
 | You write | Result |
 |---|---|
-| `/Users/me/dev/komper` | Used as-is. **Recommended.** |
+| `/Users/me/dev/komper` | Accepted. **Recommended.** |
 | `/Users/me/dev/a, /Users/me/dev/b` | Comma-separated; surrounding spaces are trimmed. |
-| `~/dev/komper` | `~` is expanded to your home directory. Prefer spelling it out. |
-| `dev/komper` | Kept verbatim and **not** resolved. Use an absolute path. |
+| `~/dev/komper` | Accepted; `~` is expanded to your home directory. |
+| `dev/komper` | **Refused** — not absolute. Reported at startup. |
+| `/` or `/Users/me` (your home) | **Refused** — too broad. Reported at startup. |
+| `/Users/me/dev/*` | **Refused** — shell/glob characters. Reported at startup. |
+| a path that does not exist | **Warning** — kept, so it works once created. |
 
-Entries are not checked for existence at startup — a path may be created later,
-and a missing directory should not stop the bot from starting. A typo therefore
-fails quietly rather than loudly. If a directory you expect to be visible is not,
-check the startup banner: both bots print
-`[startup] Additional dirs: ...` with the parsed list.
+Refused entries are dropped from `ADDITIONAL_DIRS` for every consumer, so the
+Claude allow-list, the AgentDB workspace snapshot and the orientation block
+always agree about what is configured. A directory you expected to be visible
+but is not should never fail silently: both bots print the reason at startup.
+
+```
+[startup] Additional dirs: ['/Users/me/dev/komper']
+[startup] ADDITIONAL_DIRS [ignored] 'dev/api': not an absolute path; it would
+  resolve against the process working directory, not the session workspace
+[startup] ADDITIONAL_DIRS [ignored] '/Users/me': your home directory exposes
+  every project and personal file; list individual repositories instead
+```
+
+Two entries are worth calling out because they are the most common mistake:
+
+- **Your home directory** (`/Users/me`) is refused. It is the obvious shortcut
+  when you want "all my repos", but it exposes every project *and* every
+  personal file, and it makes the per-turn workspace snapshot walk the whole
+  tree two levels deep. List each repository instead.
+- **A directory that does not exist** is a warning, not a refusal. Paths are
+  checked once at startup, and a directory may legitimately be created later;
+  refusing it would mean a bot that cannot be pointed at a repo before that repo
+  is cloned.
 
 The two runners use the value differently, which is worth knowing when
 debugging:
