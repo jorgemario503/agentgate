@@ -107,7 +107,11 @@ def test_runner_history_store_uses_name_history(module, name, tmp_path, monkeypa
 
     platform = PlatformConfig(session_store=Store(), agent_id="a")
     if module is local:
-        client = asyncio.run(runner._get_or_create_client("t1", "/ws", None, platform))
+        client, _state = asyncio.run(
+            runner._get_or_create_client("t1", "/ws", None, platform)
+        )
     else:
-        client = asyncio.run(runner._get_or_create_client("t1", "/ws", "t1", None, platform))
+        client, _state = asyncio.run(
+            runner._get_or_create_client("t1", "/ws", "t1", None, platform)
+        )
     assert client.session_store.directory.name == history_dir(name)

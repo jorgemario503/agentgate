@@ -6,6 +6,40 @@ project's release practice.
 
 ## [Unreleased]
 
+### Added
+- **`core/injection.py` — turn context has a declared owner and a declared
+  scope.** Three copies of the same assembly lived in the open-model runners and
+  had drifted from the documented behaviour. They now emit `Injection` values
+  carrying a `source` (`agentgate` or `agentdb`), an `asset`, and a scope from
+  `SESSION_START` / `SESSION_RESUME` / `SESSION_BOUNDARY` / `EVERY_TURN`, and one
+  `build_turn_injections()` assembles them. `ASSET_SCOPES` is the reviewable
+  table of what is injected when, and constructing an asset with a scope that
+  contradicts it raises rather than letting the table become a lie.
+
+### Fixed
+- **The repo map is injected once per session, as documented — not every turn.**
+  The cache added earlier avoided rebuilding the map but not re-*sending* it:
+  the text was written into a turn-local variable on every turn. Scope is now
+  consulted *before* the producer runs, so a warm turn neither builds nor sends
+  the map, the orientation blocks, or the repo-history read that feeds root
+  resolution.
+- **Retrieved memory no longer erases the repo map, and vice versa.** Assembly
+  used one `memory_context` variable, so with AgentDB enabled the map was
+  silently discarded and with it disabled the map was sent on every turn. Both
+  wrong, neither visible. Producers now compose under their own headings.
+- **The map describes the session's repository, not the operator's first
+  `ADDITIONAL_DIRS` entry.** Candidates are now paths the session's own turns
+  named that exist on disk (plus the workspace when it is itself a repo).
+  Passing `ADDITIONAL_DIRS` wholesale made the first entry win, so a session
+  working in one project received a ~1,500-token map of another — delivered with
+  full confidence, and impossible for a model to recognise as wrong. When the
+  session has no evidence, no map is injected.
+- **Compaction checkpoint stubs are no longer injected as turn memory.** A
+  retrieval pass returns `memory/compaction/checkpoint/<sid>` records alongside
+  query-relevant ones, so a turn could receive the same stub several times and
+  nothing else. Session-scoped records are separated from per-turn memory, and
+  duplicate records are collapsed.
+
 ### Changed
 - **Session states are now exactly three, and the idle reaper no longer invents
   one.** `NEW`/`WARM`/`COLD`/`RESUME_AFTER_TIMEOUT` are now

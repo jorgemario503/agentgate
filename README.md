@@ -586,11 +586,30 @@ being closed or timing out. The same applies to the orientation block below.
 The map describes things that do not change mid-session — the directory
 structure, where modules live — so re-sending it every turn would cost tokens
 for identical text, and re-*building* it every turn would re-scan the repository
-on every message. It is held for the life of the session and rebuilt when a new
-session begins, including re-resolving which repository is being worked in.
+on every message. Scope is therefore declared per asset in `core/injection.py`
+and enforced there, not inferred from where the code happens to sit. A **warm**
+turn inside an open session does not build or send the map at all; a boundary
+turn (start or resume) builds it once and sends it once.
 
 Per-turn context still carries what genuinely varies: retrieved memory and the
-skills nudge.
+skills nudge. Those are separate assets with their own declared scope, so adding
+one can no longer silently replace another.
+
+### Which repository it maps
+
+The map describes the repository the **session** is working in — not whichever
+project you happened to list first in `ADDITIONAL_DIRS`.
+
+Resolution uses evidence from the session itself: paths its own turns named that
+exist on disk, plus the workspace when that is itself a repository. `ADDITIONAL_DIRS`
+is deliberately **not** used as evidence, because it is the operator's registry
+of everything the agent may reach; using it made the first entry win, so a
+session working in `komper` received a ~1,500-token map of `agentgate` — presented
+with full confidence, and impossible for a model to recognise as wrong.
+
+If the session has not established where it is working, the map is **omitted**.
+A short omission beats a large, wrong map. It appears as soon as a turn names a
+real directory.
 
 ### What the agent is told at the start of every session
 

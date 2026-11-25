@@ -37,7 +37,8 @@ from core.prompts import (
     build_summary_prompt,
     build_system_prompt,
 )
-from core.sessions import classify_session
+from core.injection import build_turn_injections
+from core.sessions import SessionState, classify_session
 from core.providers import settings_for
 from core.reasoning import (
     build_request_kwargs,
@@ -886,10 +887,6 @@ class FireworksRunner:
         self._agent_id: str = "agent"
         self._turn_counters: dict[str, int] = {}
         self._session_workspace_paths: dict[str, str] = {}
-        # Static per-session context (orientation + repo map), built once at
-        # start/resume. Held here rather than rebuilt per turn: it changes
-        # only when the session does.
-        self._session_static_context: dict[str, str] = {}
         # Optional telemetry sink; None keeps default behaviour byte-identical.
         self._usage_sink = None
         # Optional per-agent tool scope; None keeps the existing approval ladder.
@@ -984,9 +981,6 @@ class FireworksRunner:
 
     async def close_client(self, thread_id: str) -> None:
         client = self._clients.pop(thread_id, None)
-        # The next client for this thread is a *new* session and must rebuild
-        # its static context (and re-resolve the repo root, which may differ).
-        self._session_static_context.pop(thread_id, None)
         if client:
             try:
                 await client.disconnect()
@@ -1020,9 +1014,10 @@ class FireworksRunner:
     async def _get_or_create_client(
         self, thread_id: str, workspace_path: str,
         resume_session_id, post_fn, platform: PlatformConfig,
-    ) -> FireworksAgentClient:
+    ) -> tuple[FireworksAgentClient, SessionState]:
         if thread_id in self._clients:
-            return self._clients[thread_id]
+            # Warm: this turn is a later turn inside an open session.
+            return self._clients[thread_id], SessionState.SESSION_WARM
 
         store = platform.session_store
         history_store = JsonFileSessionStore.for_runner(store.base, self.name)
@@ -1090,52 +1085,71 @@ class FireworksRunner:
         await client.connect()
         self._clients[thread_id] = client
         self._session_workspace_paths[thread_id] = workspace_path
-        return client
+        # The state is only observable HERE: once the client is stored,
+        # has_client() is True and every later turn looks warm. Callers need
+        # it to decide whether this turn is a session boundary.
+        return client, state
 
-    def _static_session_context(self, thread_id: str, workspace_path: str) -> str:
-        """Orientation + repo map, built once per session and cached.
+    def _repo_candidates(
+        self, thread_id: str, workspace_path: str, store_base: str,
+    ) -> list[str] | None:
+        """Paths this *session* has evidence for, for root resolution.
 
-        Both describe things that do not change between turns: where the session
-        starts, which paths the operator exposed, and the shape of the repository
-        being worked in. Re-deriving them every turn would re-scan the repository
-        on every message and re-send identical text, so they are built at the
-        session boundary instead -- client creation, which happens on a new
-        session and on a cold resume.
+        Returns ``None`` when the session has not established where it is
+        working, which means no repo map is injected at all.
 
-        Never raises: a failure leaves the session with no static context rather
-        than breaking the turn.
+        This deliberately does **not** consult ``ADDITIONAL_DIRS`` wholesale.
+        That list is the operator's registry of everything the agent may reach;
+        passing all of it made ``find_repo_root`` return the first entry that
+        happened to be a repository, so every session received a map of
+        whichever project the operator listed first — regardless of the task. A
+        wrong map is worse than no map, because a model cannot tell one from the
+        other.
+
+        Evidence comes from the session's own turns: paths they name that
+        actually exist on disk, read from the persisted history. The workspace is
+        included last — it is authoritative only when it is itself a repository,
+        and ``find_repo_root`` already refuses to map an enclosing checkout it
+        merely sits inside.
         """
-        cached = self._session_static_context.get(thread_id)
-        if cached is not None:
-            return cached
+        candidates: list[str] = []
 
-        parts: list[str] = []
         try:
-            from core.context.orientation import build_orientation
-            _orient = build_orientation(workspace_path, ADDITIONAL_DIRS)
-            if _orient:
-                parts.append(_orient)
+            candidates.extend(self._paths_named_in_history(thread_id, store_base))
         except Exception:
             pass
 
-        try:
-            if _cfg_repo_map_enabled():
-                from core.context.repo_map import build_repo_map_segment
-                # Candidates are the places the session has evidence for: the
-                # validated ADDITIONAL_DIRS entries. The workspace alone is a
-                # scratch dir that may sit inside an unrelated checkout, so it
-                # is not sufficient evidence on its own (see find_repo_root).
-                _seg = build_repo_map_segment(
-                    workspace_path, candidates=list(ADDITIONAL_DIRS),
-                )
-                if _seg:
-                    parts.append(_seg)
-        except Exception:
-            pass
+        candidates.append(workspace_path)
+        return candidates or None
 
-        rendered = "\n\n".join(parts)
-        self._session_static_context[thread_id] = rendered
-        return rendered
+    def _paths_named_in_history(
+        self, thread_id: str, store_base: str, limit: int = 40,
+    ) -> list[str]:
+        """Absolute paths the session's own turns mention, longest-standing first.
+
+        Reads the persisted history only — never the provider's transcript — so
+        this works the same for every open-model runner and costs one file read.
+        """
+        from core.history import JsonFileHistoryStore
+        from core.context.dir_evidence import extract_existing_dirs
+
+        directory = JsonFileHistoryStore.for_runner(store_base, self.name)
+        try:
+            messages = directory.load(thread_id)
+        except Exception:
+            return []
+
+        seen: list[str] = []
+        for message in messages or []:
+            if message.get("role") != "user":
+                continue
+            for path in extract_existing_dirs(
+                str(message.get("content") or ""),
+                workspace_path=self._session_workspace_paths.get(thread_id, ""),
+            ):
+                if path not in seen:
+                    seen.append(path)
+        return seen[:limit]
 
     async def run_prompt(
         self, thread_id: str, workspace_path: str, prompt: str,
@@ -1161,7 +1175,7 @@ class FireworksRunner:
         async with self._lock_for(thread_id):
             self._current_tasks[thread_id] = asyncio.current_task()
             try:
-                client = await self._get_or_create_client(
+                client, _state = await self._get_or_create_client(
                     thread_id, workspace_path, resume_session_id, post_fn, platform,
                 )
 
@@ -1174,38 +1188,45 @@ class FireworksRunner:
                     return invocation.error_reply, client.session_id
                 prompt = invocation.task
 
-                memory_context = None
-                # Static context (orientation + repo map) is injected at the
-                # session boundary only -- start and resume -- not every turn.
-                # It describes things that do not change mid-session, and
-                # rebuilding the map here would re-scan the repository on every
-                # message. It is still per-session, so it travels in the
-                # ephemeral context and never in the cached system prefix.
-                _static = self._static_session_context(thread_id, workspace_path)
-                if _static:
-                    memory_context = _static
+                # Every contribution to this turn's context goes through
+                # core.injection, which keeps AgentGate's environment knowledge
+                # and AgentDB's memory as separate, declared assets. They used to
+                # share one variable, so whichever ran last silently won: with
+                # AgentDB enabled the repo map was discarded, with it disabled the
+                # map was re-sent on every turn. Scope is explicit now, and a
+                # boundary-only asset is injected on the turn that opens the
+                # session, not on every turn inside it.
+                _memory_parts = None
                 if self._agentdb_middleware is not None:
                     # Entries whose directory is gone would otherwise be
                     # re-injected as "session directories" every turn.
                     prune_session_directories(self._agentdb_middleware, thread_id)
-                    messages, _ = await self._agentdb_middleware.prepare_turn_async(
+                    _messages, _ = await self._agentdb_middleware.prepare_turn_async(
                         user_query=prompt,
                         session_id=thread_id,
                         working_dirs=[workspace_path] + list(ADDITIONAL_DIRS),
                     )
-                    parts = [m["content"] for m in messages if m.get("role") in ("system", "user")]
-                    memory_parts = [p for p in parts if p != prompt]
-                    if memory_parts:
-                        memory_context = (
-                            "## Relevant memory for this turn\n"
-                            + "\n\n".join(memory_parts)
+                    _memory_parts = [
+                        m["content"] for m in _messages
+                        if m.get("role") in ("system", "user") and m["content"] != prompt
+                    ]
+                _injections = build_turn_injections(
+                    _state,
+                    workspace_path=workspace_path,
+                    additional_dirs=ADDITIONAL_DIRS,
+                    # Only computed at a boundary: it reads history, and a warm
+                    # turn has no use for it.
+                    repo_candidates=(
+                        self._repo_candidates(
+                            thread_id, workspace_path, platform.session_store.base,
                         )
-
-                _skill_nudge = client.skills_recommendation(prompt)
-                if _skill_nudge:
-                    memory_context = ((memory_context + "\n\n") if memory_context else "") + _skill_nudge
+                        if _state is not SessionState.SESSION_WARM else None
+                    ),
+                    agentdb_memory_parts=_memory_parts,
+                    nudge=client.skills_recommendation(prompt),
+                )
                 await client.query(
-                    prompt, ephemeral_context=memory_context,
+                    prompt, ephemeral_context=_injections.compose() or None,
                     explicit_skill_message=invocation.explicit_message,
                 )
 

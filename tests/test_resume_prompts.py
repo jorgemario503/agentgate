@@ -325,9 +325,11 @@ def test_cold_resume_injects_resume_block(runner_module, runner_kind, tmp_path, 
     )
 
     if runner_kind == "local":
-        client = asyncio.run(runner._get_or_create_client(thread, "/ws", None, platform))
+        client, _state = asyncio.run(
+            runner._get_or_create_client(thread, "/ws", None, platform)
+        )
     else:
-        client = asyncio.run(
+        client, _state = asyncio.run(
             runner._get_or_create_client(thread, "/ws", thread, None, platform)
         )
 

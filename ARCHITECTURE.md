@@ -150,6 +150,39 @@ replaces slot 0 of the reloaded history rather than skipping it. The saved
 history always begins with the previous process's system message, so inserting
 only when absent silently discarded every freshly built prompt.
 
+### Turn context injection
+
+`core/injection.py` decides what extra context a turn carries. Producers emit
+`Injection` values declaring a `source` (ownership), an `asset`, and a scope;
+`TurnInjections` filters by the turn's session state and composes each block
+under its own heading. Nothing is merged into one string, so no producer can
+silently replace another.
+
+| Source | Asset | Scope |
+|---|---|---|
+| agentgate | `orientation` | session boundary |
+| agentgate | `repo_map` | session boundary |
+| agentgate | `skills_nudge` | every turn |
+| agentdb | `memory_records` | every turn |
+| agentdb | `workspace`, `work_context` | every turn |
+
+A **boundary** turn is a session start or resume. Scope is consulted *before* a
+producer runs, not after, because building the repo map walks the repository —
+running it and discarding the result would keep the per-message scan the scope
+exists to prevent.
+
+The output is composed into the *ephemeral* context, which the open-model runners
+insert immediately before the last user message. It never touches
+`messages[0]`, so the cached system prefix stays byte-identical across a session.
+That matters most for Telegram and WhatsApp: their address — and therefore the
+provider cache key — is permanent, so per-session text in the system prompt would
+mutate a long-lived cache lineage at every session start.
+
+Session-scoped memory artefacts (`memory/compaction/checkpoint/<sid>`,
+`memory/compaction/summary/<sid>`) are separated from per-turn memory, because a
+retrieval pass returns them alongside query-relevant records. Without the split a
+turn can receive several identical checkpoint stubs and no actual memory.
+
 ### Session-scoped cache keys
 
 `core/cache_key.py` pins each conversation to its own provider cache lineage,
