@@ -563,9 +563,9 @@ opt-in live model probes and how to run them safely, see
 
 When `AGENTGATE_REPO_MAP_ENABLED=true`, AgentGate builds a **compact overview of
 a repository** — language breakdown, top-level directories, and Python
-classes/functions as `file:line kind name(signature)` — and injects it as
-per-turn context (an ephemeral system block just before the user turn, so the
-cached prompt prefix is not disturbed).
+classes/functions as `file:line kind name(signature)` — and injects it at the
+**start of a session and on resume**, not on every turn (see *When it is
+injected* below).
 
 It is an **orientation aid, not a file index**. Its job is to stop a model from
 spending its first several tool calls rediscovering where things live: which
@@ -578,7 +578,21 @@ AGENTGATE_REPO_MAP_ENABLED=true    # master switch (default false)
 AGENTGATE_REPO_MAP_MAX_TOKENS=1500 # size cap for the rendered map
 ```
 
-### What the agent is told at the start of every turn
+### When it is injected
+
+Once per session: when the session starts, and again when it is resumed after
+being closed or timing out. The same applies to the orientation block below.
+
+The map describes things that do not change mid-session — the directory
+structure, where modules live — so re-sending it every turn would cost tokens
+for identical text, and re-*building* it every turn would re-scan the repository
+on every message. It is held for the life of the session and rebuilt when a new
+session begins, including re-resolving which repository is being worked in.
+
+Per-turn context still carries what genuinely varies: retrieved memory and the
+skills nudge.
+
+### What the agent is told at the start of every session
 
 Independently of the repo map, the open-model runners (`local`, `fireworks`,
 `deepinfra`) inject a short **orientation block** telling the agent where it is:
@@ -618,9 +632,10 @@ so a single-directory setup does not pay for an empty section. Entries that fail
 validation (relative, a filesystem root, your home directory, shell fragments)
 are refused before they reach this block, with the reason printed at startup;
 see *Do `ADDITIONAL_DIRS` entries have to be full paths?* below. Both blocks are
-per-session and therefore travel in the ephemeral per-turn context, never in the
-cached system prefix. They are built regardless of `AGENTDB_ENABLED`, so
-orientation survives with governed memory switched off.
+per-session and therefore travel in the ephemeral context, never in the cached
+system prefix. Both are built once per session (start and resume) and are
+independent of `AGENTDB_ENABLED`, so orientation survives with governed memory
+switched off.
 
 ### Why `ADDITIONAL_DIRS` matters for it
 
@@ -741,12 +756,23 @@ Either way, an absolute path to a real project directory is what you want.
 
 ### What the map is built from
 
-The map is built from a **repository root** — the nearest directory containing
-`.git`. Because the session workspace is a scratch dir that usually sits inside
-some other checkout, the root is never guessed from the workspace alone; a map
-is only produced for a root the session plausibly works in. When there is no
-such root, **no map is injected at all** — a short omission is better than a
-sizeable, confidently wrong map of an unrelated repository.
+The map is built from a **repository root** — a directory containing `.git`. The
+session workspace is a scratch directory that usually sits *inside* some other
+checkout, so its enclosing repository (typically AgentGate's own) is **not** a
+valid answer, however tempting it is to walk up and find one.
+
+Resolution, most authoritative first:
+
+1. **A validated `ADDITIONAL_DIRS` entry that is inside a repository.** This is
+   the strongest signal available about where the user's code lives.
+2. **The workspace itself**, when it is not nested inside any repository.
+3. **Nothing.** No map is injected.
+
+The third case is the important one. When nothing indicates a repository, a
+short omission is better than a sizeable, confidently wrong map: a model cannot
+tell a wrong map from a right one, so a wrong map is worse than no map. This is
+also why the map is worth having at all — `ADDITIONAL_DIRS` turns "guess the
+project" into "here is the project".
 
 Scanning is deliberately conservative, because the map is sent to a model:
 

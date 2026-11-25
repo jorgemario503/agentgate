@@ -7,6 +7,15 @@ project's release practice.
 ## [Unreleased]
 
 ### Fixed
+- **The repo map no longer describes the wrong repository.** `find_repo_root`
+  walked up from the session workspace to the nearest `.git`, and session
+  workspaces live at `agent-sessions/<platform>/<thread>/workspace` — inside
+  AgentGate's own checkout. Every session that was not working on AgentGate
+  therefore received a ~1,500-token map of AgentGate, presented with full
+  confidence. Root resolution is now evidence-based: a validated
+  `ADDITIONAL_DIRS` entry inside a repository, else the workspace when it is not
+  nested inside one, else **no map at all**. A wrong map is worse than no map,
+  because a model cannot tell one from the other.
 - **`ADDITIONAL_DIRS` validation was POSIX-only.** It used `os.path.isabs` and
   `os.sep`, so on macOS/Linux every Windows path (`C:\Users\me\dev\komper`) was
   refused as "not an absolute path", `C:\` was not recognised as a filesystem
@@ -36,6 +45,15 @@ project's release practice.
   non-existent, so the entry disappeared silently. Entries are now stripped and
   `~` is expanded. Relative entries are still kept verbatim rather than
   resolved against an unrelated process cwd.
+
+### Changed
+- **Orientation and the repo map are injected once per session** (start and
+  resume) instead of every turn. Both describe things that do not change
+  mid-session; re-sending identical text each turn cost tokens, and re-building
+  the map re-scanned the repository on every message. They are cached per
+  session and rebuilt when a new session begins, which also re-resolves the
+  repository root. Per-turn context still carries what varies: retrieved memory
+  and the skills nudge.
 
 ### Added
 - **`ADDITIONAL_DIRS` entries are validated, and refusals are explained**
