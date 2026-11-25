@@ -116,7 +116,7 @@ def test_resume_block_survives_connect(tmp_path):
     )
 
     prompt = build_system_prompt(
-        state=SessionState.COLD, history_path=str(path), workspace_path="/ws"
+        state=SessionState.SESSION_RESUME, history_path=str(path), workspace_path="/ws"
     )
     client = local.LocalAgentClient(
         name="local",

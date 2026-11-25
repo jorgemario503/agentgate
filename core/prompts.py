@@ -389,7 +389,10 @@ def build_system_prompt(
     if skills_manifest:
         sections.append(skills_manifest)
 
-    if state.resumes and history_path:
+    # The resume block is for a session that already has history: it re-supplies
+    # what a fresh process has not seen. A warm turn has it in the transcript
+    # already, and a start has no history to re-supply.
+    if state is SessionState.SESSION_RESUME and history_path:
         try:
             resume = build_resume_block(history_path, workspace_path)
         except Exception:

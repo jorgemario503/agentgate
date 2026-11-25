@@ -119,21 +119,31 @@ backend.
 ### Session state and resume
 
 `core/sessions.py::classify_session(meta, has_client)` decides whether a turn
-needs a resume prompt. The inputs are the registry entry and whether *this
-process* still holds a live client — never the session id, because the
-open-model runners always pass `thread_id` as the session id and so cannot
+stands at a session boundary or inside one. The inputs are the registry entry and
+whether *this process* still holds a live client — never the session id, because
+the open-model runners always pass `thread_id` as the session id and so cannot
 distinguish a resume from a fresh start.
 
 | State | Condition | Prompt |
 |---|---|---|
-| `NEW` | no registry entry | base + hard rules |
-| `WARM` | entry, not expired, client alive | none — history is in RAM |
-| `COLD` | entry, not expired, client gone (bot restart) | base + hard rules + resume |
-| `RESUME_AFTER_TIMEOUT` | entry marked `expired` by the reaper | base + hard rules + resume |
+| `SESSION_START` | no registry entry (first ever, or after `/stop`) | base + hard rules |
+| `SESSION_WARM` | entry, client alive | none — history is in RAM |
+| `SESSION_RESUME` | entry, client gone (process restart, or a failed turn) | base + hard rules + resume |
 
-An expired row outranks a live client. The resume block names the full history
-file, its format and its `role` values (including `tool`), then replays only the
-last two turns — tool output stays on disk rather than in the prompt.
+`SESSION_START` and `SESSION_RESUME` are the two boundary states
+(`state.is_boundary`); per-session context such as the orientation and repo-map
+blocks is injected there and nowhere else.
+
+There is deliberately **no idle-expiry state**. The reaper's lifecycle effect is
+closing the client, which `has_client=False` already reports; a row it flagged
+classifies as `SESSION_RESUME` like any other. Whether the user was *told* about
+the idleness is presentation, recorded separately in `idle_notified_at`, and it
+only selects the opener text (`⏰ Session went idle — resuming`). No state or
+injection decision reads it.
+
+The resume block names the full history file, its format and its `role` values
+(including `tool`), then replays only the last two turns — tool output stays on
+disk rather than in the prompt.
 
 On resume the system prompt is **authoritative**: `apply_system_prompt()`
 replaces slot 0 of the reloaded history rather than skipping it. The saved

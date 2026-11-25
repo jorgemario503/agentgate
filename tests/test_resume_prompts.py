@@ -111,7 +111,7 @@ def test_r6_truncates_long_turns(tmp_path):
 def test_r4_resume_appends_and_keeps_hard_rules(tmp_path):
     path = write_history(tmp_path, [("q1", "a1")])
     prompt = build_system_prompt(
-        state=SessionState.COLD, history_path=str(path), workspace_path="/ws"
+        state=SessionState.SESSION_RESUME, history_path=str(path), workspace_path="/ws"
     )
     assert HARD_RULE_MARKER in prompt
     assert "coding assistant" in prompt
@@ -121,7 +121,7 @@ def test_r4_resume_appends_and_keeps_hard_rules(tmp_path):
 def test_r5_fires_with_agentdb_disabled(tmp_path):
     path = write_history(tmp_path, [("q1", "a1")])
     prompt = build_system_prompt(
-        state=SessionState.COLD,
+        state=SessionState.SESSION_RESUME,
         history_path=str(path),
         workspace_path="/ws",
         agentdb_middleware=None,
@@ -132,7 +132,7 @@ def test_r5_fires_with_agentdb_disabled(tmp_path):
 def test_new_session_has_no_resume_block(tmp_path):
     path = write_history(tmp_path, [("q1", "a1")])
     prompt = build_system_prompt(
-        state=SessionState.NEW, history_path=str(path), workspace_path="/ws"
+        state=SessionState.SESSION_START, history_path=str(path), workspace_path="/ws"
     )
     assert str(path) not in prompt
     assert HARD_RULE_MARKER in prompt
@@ -141,7 +141,7 @@ def test_new_session_has_no_resume_block(tmp_path):
 def test_warm_session_has_no_resume_block(tmp_path):
     path = write_history(tmp_path, [("q1", "a1")])
     prompt = build_system_prompt(
-        state=SessionState.WARM, history_path=str(path), workspace_path="/ws"
+        state=SessionState.SESSION_WARM, history_path=str(path), workspace_path="/ws"
     )
     assert str(path) not in prompt
 
@@ -238,7 +238,7 @@ def test_d6_agentdb_empty_memory():
 
 def test_d8_everything_missing_still_yields_base_plus_resume():
     prompt = build_system_prompt(
-        state=SessionState.COLD,
+        state=SessionState.SESSION_RESUME,
         history_path="/nonexistent/t1.json",
         workspace_path="/ws",
         agentdb_middleware=None,
@@ -261,7 +261,7 @@ def test_sections_ordered_stable_to_volatile(tmp_path):
     """Prefix-cache rule: base rules precede the resume block."""
     path = write_history(tmp_path, [("q1", "a1")])
     prompt = build_system_prompt(
-        state=SessionState.COLD, history_path=str(path), workspace_path="/ws"
+        state=SessionState.SESSION_RESUME, history_path=str(path), workspace_path="/ws"
     )
     assert prompt.index(HARD_RULE_MARKER) < prompt.index(str(path))
 
@@ -290,8 +290,8 @@ def test_cold_resume_injects_resume_block(runner_module, runner_kind, tmp_path, 
         base = str(tmp_path)
 
     store = Store()
-    # An unexpired registry row plus no live client is exactly COLD.
-    meta = {"session_id": thread, "workspace_path": "/ws", "expired": False}
+    # A registry row plus no live client is exactly SESSION_RESUME.
+    meta = {"session_id": thread, "workspace_path": "/ws"}
 
     monkeypatch.setenv("DEEPINFRA_API_KEY", "k")
     monkeypatch.setenv("FIREWORKS_API_KEY", "k")

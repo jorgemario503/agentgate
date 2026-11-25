@@ -125,10 +125,10 @@ def _expire_due_registry(store, monkeypatch, thread_ids):
         except asyncio.CancelledError:
             pass
 
-    expired = []
-    monkeypatch.setattr(type(store), "_expire_session", lambda self, tid: expired.append(tid), raising=False)
+    notified = []
+    monkeypatch.setattr(type(store), "mark_idle_notified", lambda self, tid: notified.append(tid), raising=False)
     asyncio.run(drive())
-    return closed, expired
+    return closed, notified
 
 
 def _drive_reaper(monkeypatch, thread_ids, tmp_path):
@@ -141,8 +141,8 @@ def _drive_reaper(monkeypatch, thread_ids, tmp_path):
         store, "load_registry",
         lambda: {tid: {"last_activity": stale, "channel": "test"} for tid in thread_ids},
     )
-    expired = []
-    monkeypatch.setattr(store, "_expire_session", lambda tid: expired.append(tid))
+    notified = []
+    monkeypatch.setattr(store, "mark_idle_notified", lambda tid: notified.append(tid))
     monkeypatch.setattr(sessions, "REAPER_INTERVAL_SECONDS", 0)
     closed = []
 
@@ -162,24 +162,24 @@ def _drive_reaper(monkeypatch, thread_ids, tmp_path):
             pass
 
     asyncio.run(drive())
-    return closed, expired
+    return closed, notified
 
 
 def test_reaper_expires_idle_thread_without_flag(monkeypatch, tmp_path):
-    closed, expired = _drive_reaper(monkeypatch, ["t1"], tmp_path)
+    closed, notified = _drive_reaper(monkeypatch, ["t1"], tmp_path)
     assert set(closed) == {"t1"}
-    assert set(expired) == {"t1"}
+    assert set(notified) == {"t1"}
 
 
 def test_reaper_skips_thread_with_keepalive_on(monkeypatch, tmp_path):
     sessions.enable_keep_alive("t1")
-    closed, expired = _drive_reaper(monkeypatch, ["t1"], tmp_path)
+    closed, notified = _drive_reaper(monkeypatch, ["t1"], tmp_path)
     assert closed == []
-    assert expired == []
+    assert notified == []
 
 
 def test_reaper_expires_again_after_keepalive_off(monkeypatch, tmp_path):
     sessions.enable_keep_alive("t1")
     sessions.disable_keep_alive("t1")
-    closed, expired = _drive_reaper(monkeypatch, ["t1"], tmp_path)
+    closed, notified = _drive_reaper(monkeypatch, ["t1"], tmp_path)
     assert set(closed) == {"t1"}

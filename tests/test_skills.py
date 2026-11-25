@@ -57,7 +57,7 @@ class TestDisabledEquivalence(unittest.TestCase):
         })
 
     def test_prompt_unchanged_when_manifest_empty(self):
-        state = sessions.SessionState.NEW
+        state = sessions.SessionState.SESSION_START
         plain = prompts.build_system_prompt(state=state)
         with_empty = prompts.build_system_prompt(state=state, skills_manifest="")
         self.assertEqual(plain, with_empty)

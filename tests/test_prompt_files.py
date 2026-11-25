@@ -96,7 +96,7 @@ def test_override_does_not_break_the_resume_composition(prompt_dir, tmp_path):
     from core.sessions import SessionState
 
     prompt = prompts.build_system_prompt(
-        state=SessionState.COLD, history_path=str(path), workspace_path="/ws"
+        state=SessionState.SESSION_RESUME, history_path=str(path), workspace_path="/ws"
     )
     assert prompt.index("CUSTOM RULES") < prompt.index(str(path))
 
@@ -172,7 +172,7 @@ def test_sections_use_markdown_headings(tmp_path, monkeypatch):
     from core.sessions import SessionState
 
     built = prompts.build_system_prompt(
-        state=SessionState.COLD, history_path=str(path), workspace_path="/ws"
+        state=SessionState.SESSION_RESUME, history_path=str(path), workspace_path="/ws"
     )
     # `memory` only appears when AgentDB yields content, so it is checked
     # separately; these three are always present.

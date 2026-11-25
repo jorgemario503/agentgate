@@ -6,7 +6,28 @@ project's release practice.
 
 ## [Unreleased]
 
+### Changed
+- **Session states are now exactly three, and the idle reaper no longer invents
+  one.** `NEW`/`WARM`/`COLD`/`RESUME_AFTER_TIMEOUT` are now
+  `SESSION_START`/`SESSION_WARM`/`SESSION_RESUME`; `RESUME_AFTER_TIMEOUT` is
+  gone. The reaper's only lifecycle effect is closing the client, which
+  `has_client=False` already reports, so a row it flagged classifies as an
+  ordinary `SESSION_RESUME`. Whether the user was *told* about the idleness is
+  presentation, stored separately as `idle_notified_at` (read-compatible with
+  rows written by an older process, which used `"expired": true`), and it now
+  selects only the opener text: `⏰ Session went idle — resuming`. The overloaded
+  `state.resumes` property is replaced by `state.is_boundary`, which means what
+  the injection layer needs ("start or resume"), and `opener` takes
+  `idle_notified=` rather than being a property. No behaviour change to what is
+  injected, and the Claude runner is untouched.
+
 ### Fixed
+- **A session that had gone idle could lose its saved session id.** The bots
+  gated the resume path on `meta and not meta.get("expired")`, so once the
+  reaper had notified the user, the next message fell through to the *start*
+  path, re-registered the row and discarded `resume_session_id` — the SDK UUID
+  on Claude. A row that exists is resumable; the notification flag is
+  presentation and no longer gates the branch.
 - **The repo map no longer describes the wrong repository.** `find_repo_root`
   walked up from the session workspace to the nearest `.git`, and session
   workspaces live at `agent-sessions/<platform>/<thread>/workspace` — inside
