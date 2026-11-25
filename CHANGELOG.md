@@ -6,6 +6,24 @@ project's release practice.
 
 ## [Unreleased]
 
+### Added
+- **AgentDB memory is scoped per asset, not per retrieval call.** One
+  `prepare_turn_async()` returns every family at once, so the previous code
+  treated them all as per-turn content and a turn could receive five compaction
+  checkpoint stubs and no actual memory. Each family now has a declared scope,
+  classified from the record key — the store's `kind` column is `source` for
+  every row, so it cannot distinguish a checkpoint from an episodic fact:
+
+  | Family | Scope |
+  |---|---|
+  | `memory/episodic/`, `memory/canonical/` | every turn — they answer the question |
+  | `memory/compaction/summary/<sid>` | session resume — a handover note for a process that lost the transcript |
+  | `memory/compaction/checkpoint/<sid>` | **never** — a tombstone with no content |
+
+  Checkpoints are declared `NEVER` rather than dropped silently, so the table
+  says what happens to them. Verified against a real store: all 16 checkpoint
+  rows held only `{"session_id": ..., "type": "checkpoint"}`.
+
 ### Removed
 - **`skills/example-summarize/`** — a sample template that nobody invoked. It had
   no `metadata.agentgate.triggers`, so Mode B could never surface it, and it

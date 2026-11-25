@@ -196,7 +196,7 @@ def test_checkpoint_stubs_are_not_rendered_as_turn_memory(ws):
 
 
 def test_the_header_survives_with_its_per_turn_records():
-    per_turn, _session = split_memory_parts([
+    per_turn, _resume, _discarded = split_memory_parts([
         "Background context:\n"
         "- memory/compaction/checkpoint/1: {}\n"
         "- memory/episodic/1/x: real fact"
@@ -208,13 +208,14 @@ def test_the_header_survives_with_its_per_turn_records():
 
 
 def test_duplicate_records_are_collapsed():
+    """A retrieval pass can return the same record more than once."""
     line = "- memory/compaction/checkpoint/1: {}"
-    _per_turn, session_scoped = split_memory_parts([f"h\n{line}\n{line}"])
-    assert session_scoped == [line]
+    _per_turn, _resume, discarded = split_memory_parts([f"h\n{line}\n{line}"])
+    assert discarded == [line]
 
 
 def test_empty_and_blank_parts_are_ignored():
-    assert split_memory_parts(["", "   ", None]) == ([], [])
+    assert split_memory_parts(["", "   ", None]) == ([], [], [])
     assert memory_records_injection([]) is None
     assert memory_records_injection(["   "]) is None
 
@@ -304,3 +305,99 @@ def test_warm_reuse_of_a_live_client_is_warm():
     # Mirrors the short-circuit in `_get_or_create_client`, which is the only
     # place a later turn's state can be decided correctly.
     assert SessionState.SESSION_WARM.is_boundary is False
+
+
+# -- AgentDB memory assets are scoped by what a record describes -----------
+
+
+def test_memory_families_are_classified_by_key():
+    """The store's `kind` column is 'source' for every row, so key is the only
+    reliable classifier."""
+    from core.injection import MemoryAsset, memory_asset_of
+
+    cases = {
+        "memory/episodic/deepinfra/slack/1/fact": MemoryAsset.EPISODIC,
+        "memory/episodic/claude/x/1/directory_tracking/2026": MemoryAsset.EPISODIC,
+        "memory/compaction/checkpoint/1": MemoryAsset.CHECKPOINT,
+        "memory/compaction/summary/1": MemoryAsset.COMPACTION_SUMMARY,
+        "memory/canonical/abc": MemoryAsset.CANONICAL,
+        "unrecognised/key": MemoryAsset.OTHER,
+        "": MemoryAsset.OTHER,
+    }
+    for key, expected in cases.items():
+        assert memory_asset_of(key) is expected, key
+
+
+def test_memory_asset_scopes_match_the_declared_table():
+    """Each family's scope comes from ASSET_SCOPES, not from a second list."""
+    from core.injection import ASSET_SCOPES, scope_of_memory_record
+
+    assert scope_of_memory_record("memory/compaction/checkpoint/1") is ASSET_SCOPES["compaction_checkpoint"]
+    assert scope_of_memory_record("memory/compaction/summary/1") is ASSET_SCOPES["compaction_summary"]
+    assert scope_of_memory_record("memory/episodic/1/x") is ASSET_SCOPES["memory_records"]
+    assert ASSET_SCOPES["compaction_checkpoint"] is InjectionScope.NEVER
+    assert ASSET_SCOPES["compaction_summary"] is InjectionScope.SESSION_RESUME
+
+
+def test_checkpoints_are_declared_never_injected():
+    """A tombstone has no content: all 16 rows in a real store were pure stubs."""
+    for state in ALL_STATES:
+        turn = build_turn_injections(
+            state, workspace_path="/ws",
+            agentdb_memory_parts=["- memory/compaction/checkpoint/1: {}"],
+        )
+        assets = [i.asset for i in turn.applying()]
+        assert "compaction_checkpoint" not in assets, state
+        assert "compaction_summary" not in assets, state
+        # Nothing from the checkpoint reaches the rendered context.
+        assert "checkpoint" not in turn.compose(), state
+
+
+def test_compaction_summary_is_a_resume_asset(ws):
+    """The handover note helps a process that lost the transcript, not a live one."""
+    parts = ["- memory/compaction/summary/1: implemented the milestone"]
+
+    resume = build_turn_injections(
+        SessionState.SESSION_RESUME, workspace_path=str(ws), agentdb_memory_parts=parts,
+    )
+    assert "compaction_summary" in [i.asset for i in resume.applying()]
+
+    for state in (SessionState.SESSION_START, SessionState.SESSION_WARM):
+        turn = build_turn_injections(
+            state, workspace_path=str(ws), agentdb_memory_parts=parts,
+        )
+        assert "compaction_summary" not in [i.asset for i in turn.applying()], state
+
+
+def test_episodic_records_stay_per_turn(ws):
+    """A record recalled for this question must not be suppressed mid-session."""
+    parts = ["- memory/episodic/1/x: user works on komper"]
+    for state in ALL_STATES:
+        turn = build_turn_injections(
+            state, workspace_path=str(ws), agentdb_memory_parts=parts,
+        )
+        assert "memory_records" in [i.asset for i in turn.applying()], state
+
+
+def test_a_mixed_retrieval_is_split_into_three_buckets(ws):
+    """One retrieval call mixes families; scope attaches to the record."""
+    parts = [
+        "Background context from previous sessions:\n"
+        "- memory/compaction/checkpoint/1: {}\n"
+        "- memory/compaction/summary/1: did X then Y\n"
+        "- memory/episodic/9/fact: real fact"
+    ]
+    per_turn, resume_only, discarded = split_memory_parts(parts)
+    assert "real fact" in "\n".join(per_turn)
+    assert "checkpoint" not in "\n".join(per_turn)
+    assert "did X then Y" in "\n".join(resume_only)
+    assert len(discarded) == 1
+
+
+def test_every_memory_family_has_a_declared_asset():
+    """No family may fall through to an undeclared scope."""
+    from core.injection import MemoryAsset, _ASSET_FOR_FAMILY
+
+    for family in MemoryAsset:
+        asset = _ASSET_FOR_FAMILY[family]
+        assert asset in ASSET_SCOPES, f"{family.value} -> undeclared asset {asset!r}"

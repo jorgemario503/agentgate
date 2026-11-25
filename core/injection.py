@@ -60,9 +60,15 @@ class InjectionScope(Enum):
     SESSION_RESUME = "session_resume"
     SESSION_BOUNDARY = "session_boundary"
     EVERY_TURN = "every_turn"
+    #: Declared but never injected. For records that exist in the store and can
+    #: be retrieved, but carry no content worth sending — saying so in the table
+    #: is clearer than dropping them without a declaration.
+    NEVER = "never"
 
     def applies(self, state: SessionState) -> bool:
         """Whether this scope covers a turn in ``state``."""
+        if self is InjectionScope.NEVER:
+            return False
         if self is InjectionScope.EVERY_TURN:
             return True
         if state is SessionState.SESSION_WARM:
@@ -84,31 +90,110 @@ Source = Literal["agentgate", "agentdb"]
 #: producer that is not declared here still works (its :class:`Injection` carries
 #: its own scope) — the table documents the agreed configuration so drift is a
 #: diff, not a surprise.
+#:
+#: AgentDB's assets are split by what each record *describes*, not by which call
+#: returned it. A single retrieval pass mixes all four families, so scope has to
+#: be attached to the record, never to the call.
 ASSET_SCOPES: dict[str, InjectionScope] = {
     # AgentGate: environment knowledge and per-turn hints.
     "orientation": InjectionScope.SESSION_BOUNDARY,
     "repo_map": InjectionScope.SESSION_BOUNDARY,
     "skills_nudge": InjectionScope.EVERY_TURN,
-    # AgentDB: governed memory. Recalled records are query-relevant, so they
-    # follow the turn. Compaction artefacts describe a session, not a question.
+    # AgentDB. `memory_records` is what makes a turn's retrieval worth doing: a
+    # record recalled *for this question*. The other three describe the session
+    # or the workspace, so they belong to the boundary.
     "memory_records": InjectionScope.EVERY_TURN,
-    "workspace": InjectionScope.EVERY_TURN,
+    "compaction_summary": InjectionScope.SESSION_RESUME,
+    "compaction_checkpoint": InjectionScope.NEVER,
+    "workspace": InjectionScope.SESSION_BOUNDARY,
     "work_context": InjectionScope.EVERY_TURN,
 }
 
-#: Assets whose records describe a *session* rather than a *turn*.
-#:
-#: AgentDB keys record these as ``memory/compaction/checkpoint/<sid>`` and
-#: ``memory/compaction/summary/<sid>``. A retrieval pass returns them alongside
-#: query-relevant records because nothing filters them, which is why a turn can
-#: receive five identical checkpoint stubs. They are not per-turn content, so
-#: they are not rendered by the per-turn memory asset.
-_SESSION_SCOPED_RECORD_KEY_MARKERS = ("memory/compaction/",)
+
+class MemoryAsset(Enum):
+    """The families of record an AgentDB retrieval can return.
+
+    Derived from the record *key*, which is the only stable classifier: the
+    store's ``kind`` column says ``source`` for every row, so it cannot tell a
+    compaction checkpoint from an episodic fact.
+
+    The store writes four families (verified against a real database):
+    ``memory/episodic/<runtime>/<agent>/<sid>/...``,
+    ``memory/compaction/checkpoint/<sid>``,
+    ``memory/compaction/summary/<sid>``, and
+    ``memory/canonical/...``.
+    """
+
+    #: Records written about *this* session's act of working: tool traces,
+    #: directory snapshots, per-turn observations. Session-local by
+    #: construction — AgentDB already refuses cross-session episodic records.
+    EPISODIC = "episodic"
+    #: A tombstone marking that a session compacted. Carries no content.
+    CHECKPOINT = "checkpoint"
+    #: The handover text written at compaction. Content, and it describes the
+    #: session's past, so it is a resume asset — not a per-turn one.
+    COMPACTION_SUMMARY = "compaction_summary"
+    #: Derived, validated memory (a canonical consolidates sources).
+    CANONICAL = "canonical"
+    #: Anything unrecognised. Treated as per-turn: it came from a query.
+    OTHER = "other"
+
+
+#: Substring -> family. Ordered: the specific prefixes before the general ones,
+#: because ``memory/compaction/checkpoint/`` is also matched by ``compaction``.
+_MEMORY_ASSET_MARKERS: tuple[tuple[str, MemoryAsset], ...] = (
+    ("memory/compaction/checkpoint/", MemoryAsset.CHECKPOINT),
+    ("memory/compaction/summary/", MemoryAsset.COMPACTION_SUMMARY),
+    ("memory/compaction/", MemoryAsset.COMPACTION_SUMMARY),
+    ("memory/canonical/", MemoryAsset.CANONICAL),
+    ("memory/episodic/", MemoryAsset.EPISODIC),
+    # Directory snapshots are episodic records, and AgentDB already filters them
+    # from injection. Kept explicit so the classification is total.
+    ("/directory_tracking/", MemoryAsset.EPISODIC),
+)
+
+#: Which asset each family is declared under in :data:`ASSET_SCOPES`.
+_ASSET_FOR_FAMILY: dict[MemoryAsset, str] = {
+    MemoryAsset.EPISODIC: "memory_records",
+    MemoryAsset.CANONICAL: "memory_records",
+    MemoryAsset.OTHER: "memory_records",
+    MemoryAsset.COMPACTION_SUMMARY: "compaction_summary",
+    MemoryAsset.CHECKPOINT: "compaction_checkpoint",
+}
+
+
+def memory_asset_of(key: str) -> MemoryAsset:
+    """Classify a memory record by its key. Unrecognised keys are ``OTHER``."""
+    text = key or ""
+    for marker, family in _MEMORY_ASSET_MARKERS:
+        if marker in text:
+            return family
+    return MemoryAsset.OTHER
+
+
+def is_checkpoint_record(key: str) -> bool:
+    """A compaction tombstone: no content, so never worth injecting.
+
+    ``checkpoint`` records store only ``{"session_id": ..., "type": "checkpoint"}``
+    — verified against a real store, where all 16 checkpoint rows were pure
+    stubs. Injecting them costs a line each and tells the model nothing.
+    """
+    return memory_asset_of(key) is MemoryAsset.CHECKPOINT
+
+
+def scope_of_memory_record(key: str) -> InjectionScope:
+    """The scope a single memory record belongs to."""
+    return ASSET_SCOPES[_ASSET_FOR_FAMILY[memory_asset_of(key)]]
 
 
 def is_session_scoped_record(key: str) -> bool:
-    """True for memory records that describe a session, not a question."""
-    return any(marker in (key or "") for marker in _SESSION_SCOPED_RECORD_KEY_MARKERS)
+    """True for memory records that describe a session, not a question.
+
+    Checkpoints and compaction summaries both do: one is a tombstone, the other
+    is the session's handover note. Neither answers *this* turn's question.
+    """
+    return memory_asset_of(key) in (MemoryAsset.CHECKPOINT, MemoryAsset.COMPACTION_SUMMARY)
+
 
 
 @dataclass(frozen=True)
@@ -194,6 +279,7 @@ class TurnInjections:
 #: text via prompt files, never these.
 ORIENTATION_HEADING = ""      # build_orientation emits its own two headings
 MEMORY_RECORDS_HEADING = "## Relevant memory for this turn"
+COMPACTION_HEADING = "## Summary of earlier work in this session"
 
 
 def orientation_injection(
@@ -267,45 +353,97 @@ def memory_records_injection(parts: Iterable[str]) -> Optional[Injection]:
     )
 
 
-def split_memory_parts(parts: Iterable[str]) -> tuple[list[str], list[str]]:
-    """Separate per-turn memory from session-scoped artefacts.
+def compaction_summary_injection(parts: Iterable[str]) -> Optional[Injection]:
+    """AgentDB's compaction handover note, shown when a session resumes.
 
-    Returns ``(per_turn, session_scoped)``.
+    The summary is written at compaction and describes what the session had done
+    before the transcript was trimmed. A resuming process needs exactly that; a
+    live one already has the transcript.
+    """
+    body = "\n\n".join(p for p in parts if (p or "").strip())
+    if not body.strip():
+        return None
+    return Injection(
+        source="agentdb",
+        asset="compaction_summary",
+        heading=COMPACTION_HEADING,
+        body=body,
+        scope=ASSET_SCOPES["compaction_summary"],
+    )
 
-    AgentDB renders each retrieved record as one line inside a single block, so
-    the split is per *line*: a block whose lines are all session-scoped (e.g.
-    ``- memory/compaction/checkpoint/...``) belongs to the session, while a mixed
-    block contributes only its per-turn lines. An AgentDB block header line that
-    carries no record is kept with the per-turn part so the remaining records
-    still have their header.
 
-    Duplicates are removed: a retrieval pass can return the same record twice,
-    and five identical checkpoint stubs are pure noise.
+def split_memory_parts(
+    parts: Iterable[str],
+) -> tuple[list[str], list[str], list[str]]:
+    """Sort retrieved memory lines into the three scopes they belong to.
+
+    Returns ``(per_turn, resume_only, discarded)``.
+
+    - **per_turn** — episodic and canonical records: they answer this question.
+    - **resume_only** — compaction summaries: the session's handover note. Worth
+      showing a process that has lost the transcript, not worth repeating on
+      every turn of a live session.
+    - **discarded** — compaction checkpoints. They carry no content (all 16 rows
+      in a real store were pure ``{"type": "checkpoint"}`` stubs), so they are
+      dropped rather than re-scoped.
+
+    AgentDB renders each record as one line in a block, so the split is per
+    *line*. A header line that carries no record stays with whichever bucket has
+    content, so surviving records keep their heading. Duplicates are collapsed:
+    a retrieval pass can return the same record more than once.
     """
     per_turn: list[str] = []
-    session_scoped: list[str] = []
+    resume_only: list[str] = []
+    discarded: list[str] = []
     seen: set[str] = set()
 
     for part in parts:
         if not (part or "").strip():
             continue
-        keep: list[str] = []
+        keep_turn: list[str] = []
+        keep_resume: list[str] = []
+        header: list[str] = []
         for line in part.splitlines():
             stripped = line.strip()
             if not stripped:
                 continue
+            if is_checkpoint_record(stripped):
+                if stripped not in seen:
+                    seen.add(stripped)
+                    discarded.append(stripped)
+                continue
             if is_session_scoped_record(stripped):
                 if stripped not in seen:
                     seen.add(stripped)
-                    session_scoped.append(stripped)
+                    keep_resume.append(line)
+                continue
+            if not _looks_like_record_line(stripped):
+                # A block header ("Background context from previous sessions:")
+                # belongs with whichever records survive.
+                header.append(line)
                 continue
             if stripped not in seen:
                 seen.add(stripped)
-                keep.append(line)
-        if keep:
-            per_turn.append("\n".join(keep))
+                keep_turn.append(line)
 
-    return per_turn, session_scoped
+        if keep_turn:
+            per_turn.append("\n".join(header + keep_turn))
+            header = []
+        if keep_resume:
+            resume_only.append("\n".join(header + keep_resume))
+
+    return per_turn, resume_only, discarded
+
+
+def _looks_like_record_line(line: str) -> bool:
+    """Heuristic: a rendered memory record starts with a bullet.
+
+    AgentDB's ``record_line_format`` is ``- {key}: {value}``, so every record is
+    a bullet and every heading is not. Used only to decide where a block header
+    travels, never to classify a record's family.
+    """
+    return line.lstrip().startswith("- ")
+
 
 
 
@@ -348,8 +486,13 @@ def build_turn_injections(
             injections.add(repo_map_injection(workspace_path, candidates=repo_candidates))
 
     if agentdb_memory_parts:
-        per_turn, _session_scoped = split_memory_parts(agentdb_memory_parts)
+        per_turn, resume_only, _discarded = split_memory_parts(agentdb_memory_parts)
         injections.add(memory_records_injection(per_turn))
+        # A compaction summary is the session's handover note: it belongs to a
+        # resume, where the transcript may be gone. Repeating it on every turn of
+        # a live session would be the same noise as the checkpoint stubs.
+        if resume_only and InjectionScope.SESSION_RESUME.applies(state):
+            injections.add(compaction_summary_injection(resume_only))
 
     if (nudge or "").strip():
         injections.add(Injection(

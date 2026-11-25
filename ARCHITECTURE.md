@@ -164,7 +164,10 @@ silently replace another.
 | agentgate | `repo_map` | session boundary |
 | agentgate | `skills_nudge` | every turn |
 | agentdb | `memory_records` | every turn |
-| agentdb | `workspace`, `work_context` | every turn |
+| agentdb | `compaction_summary` | session resume |
+| agentdb | `compaction_checkpoint` | never |
+| agentdb | `workspace` | session boundary |
+| agentdb | `work_context` | every turn |
 
 A **boundary** turn is a session start or resume. Scope is consulted *before* a
 producer runs, not after, because building the repo map walks the repository —
@@ -178,10 +181,21 @@ That matters most for Telegram and WhatsApp: their address — and therefore the
 provider cache key — is permanent, so per-session text in the system prompt would
 mutate a long-lived cache lineage at every session start.
 
-Session-scoped memory artefacts (`memory/compaction/checkpoint/<sid>`,
-`memory/compaction/summary/<sid>`) are separated from per-turn memory, because a
-retrieval pass returns them alongside query-relevant records. Without the split a
-turn can receive several identical checkpoint stubs and no actual memory.
+AgentDB's assets are split by **what a record describes**, not by which call
+returned it: one retrieval pass mixes all four families. The record key is the
+only reliable classifier — the store's `kind` column is `source` for every row,
+so it cannot tell a compaction checkpoint from an episodic fact.
+
+| Key prefix | Family | Why that scope |
+|---|---|---|
+| `memory/episodic/` | episodic | written about this session's own work; answers a question |
+| `memory/canonical/` | canonical | derived memory, query-relevant by construction |
+| `memory/compaction/summary/<sid>` | handover note | describes the session's past; useful only to a process that lost the transcript |
+| `memory/compaction/checkpoint/<sid>` | tombstone | carries no content — verified against a real store, where all 16 rows were pure `{"type": "checkpoint"}` stubs |
+
+Checkpoints are declared `NEVER` rather than silently dropped, so the table says
+what happens to them. Summaries are `SESSION_RESUME`: repeating a handover note
+on every turn of a live session is the same noise as the stubs.
 
 ### Session-scoped cache keys
 
