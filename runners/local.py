@@ -52,7 +52,7 @@ from core.reasoning import (
 )
 from core.tools.registry import Tool, build_tools
 from core.skills import (
-    build_skills_context, SkillSession,
+    SkillSession, skills_context_from_config,
     is_skill_read_tool, record_activation_from_result,
     recommend, build_recommendation_nudge,
     restoration_message, resolve_invocation,
@@ -74,14 +74,13 @@ def _cfg_tool_compression_enabled() -> bool:
 
 
 def _skills_context():
-    """Build the shared skills context from config (OFF by default)."""
+    """Build the shared skills context from config (OFF by default).
+
+    Delegates to core.skills so the runners and the startup banner build the
+    identical context from the identical settings.
+    """
     import core.config as _c
-    return build_skills_context(
-        enabled=bool(getattr(_c, "AGENTGATE_SKILLS_ENABLED", False)),
-        skills_dir=getattr(_c, "AGENTGATE_SKILLS_DIR", "skills"),
-        manifest_tokens=int(getattr(_c, "AGENTGATE_SKILLS_MANIFEST_TOKENS", 600)),
-        selection_mode=getattr(_c, "AGENTGATE_SKILLS_SELECTION_MODE", "model"),
-    )
+    return skills_context_from_config(_c)
 
 
 # ---------------------------------------------------------------------------

@@ -27,7 +27,7 @@ from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 import core.approvals as approvals
 import core.commands as commands
 import core.config as config
-from core.skills import skills_startup_report
+from core.skills import skills_context_from_config, skills_startup_report
 from core.sessions import (
     SessionStore, classify_session, idle_notified_at, wants_claude_settings,
 )
@@ -320,24 +320,6 @@ def _register_handlers(platform: PlatformConfig):
 # Startup
 # ---------------------------------------------------------------------------
 
-def _startup_skills_context():
-    """The skills context as the runners will build it, for the startup banner.
-
-    Built from the same config the runners read, so the banner reports what a
-    turn will actually do rather than a separate guess. Never raises.
-    """
-    from core.skills import build_skills_context
-    try:
-        return build_skills_context(
-            enabled=bool(getattr(config, "AGENTGATE_SKILLS_ENABLED", False)),
-            skills_dir=getattr(config, "AGENTGATE_SKILLS_DIR", "skills"),
-            manifest_tokens=int(getattr(config, "AGENTGATE_SKILLS_MANIFEST_TOKENS", 600)),
-            selection_mode=getattr(config, "AGENTGATE_SKILLS_SELECTION_MODE", "model"),
-        )
-    except Exception:
-        from core.skills import EMPTY_CATALOG, SkillsContext
-        return SkillsContext(False, EMPTY_CATALOG, "", "model", ())
-
 
 async def main(backend: str = "claude", model: str | None = None):
     global app, REASONING_BACKEND, REASONING_MODEL
@@ -375,7 +357,7 @@ async def main(backend: str = "claude", model: str | None = None):
         print(f"[startup] {_line}")
     # Skills fail quietly on purpose (an excluded skill or a fallback mode must
     # never cost a turn), which also hides a misconfiguration. Report once here.
-    for _line in skills_startup_report(_startup_skills_context()):
+    for _line in skills_startup_report(skills_context_from_config(config)):
         print(f"[startup] {_line}")
     print(f"[startup] Approval timeout: {config.APPROVAL_TIMEOUT_SECONDS}s")
 

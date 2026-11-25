@@ -410,3 +410,72 @@ def test_missing_directory_diagnostic_names_the_full_path():
     joined = "\n".join(skills_startup_report(ctx))
     assert "definitely-not-here-xyz" in joined
     assert os.path.abspath("definitely-not-here-xyz") in joined
+
+
+# -- the config contract ----------------------------------------------------
+
+
+def test_skills_config_protocol_names_the_four_settings():
+    """The contract is structural, so core.skills never imports core.config."""
+    from core.skills import SkillsConfig
+
+    expected = {
+        "AGENTGATE_SKILLS_ENABLED",
+        "AGENTGATE_SKILLS_DIR",
+        "AGENTGATE_SKILLS_MANIFEST_TOKENS",
+        "AGENTGATE_SKILLS_SELECTION_MODE",
+    }
+    assert set(getattr(SkillsConfig, "__annotations__", {})) == expected
+
+
+def test_core_config_satisfies_the_protocol():
+    """Real config must structurally match, or the contract is aspirational."""
+    import core.config as config
+    from core.skills import SkillsConfig
+
+    for name in SkillsConfig.__annotations__:
+        assert hasattr(config, name), f"core.config lacks {name}"
+
+
+def test_context_from_config_matches_a_direct_build():
+    """The runners and the startup banner must build the identical context."""
+    import core.config as config
+    from core.skills import build_skills_context, skills_context_from_config
+
+    via_config = skills_context_from_config(config)
+    direct = build_skills_context(
+        enabled=bool(config.AGENTGATE_SKILLS_ENABLED),
+        skills_dir=config.AGENTGATE_SKILLS_DIR,
+        manifest_tokens=int(config.AGENTGATE_SKILLS_MANIFEST_TOKENS),
+        selection_mode=config.AGENTGATE_SKILLS_SELECTION_MODE,
+    )
+    assert via_config.enabled == direct.enabled
+    assert via_config.mode == direct.mode
+    assert via_config.manifest == direct.manifest
+    assert [e.name for e in via_config.catalog.entries] == [
+        e.name for e in direct.catalog.entries
+    ]
+
+
+def test_context_from_config_tolerates_a_partial_object():
+    """A startup banner must never be the thing that stops a bot starting."""
+    from core.skills import skills_context_from_config
+
+    class Bare:
+        pass
+
+    ctx = skills_context_from_config(Bare())
+    assert ctx.enabled is False
+
+
+def test_bots_and_runners_share_one_builder():
+    """Duplicated builders were how the banner could drift from a real turn."""
+    import inspect
+
+    for module_path in ("bots/slack.py", "bots/telegram.py", "bots/whatsapp.py",
+                        "runners/deepinfra.py", "runners/local.py", "runners/fireworks.py"):
+        source = inspect.getsource(
+            __import__(module_path.replace("/", ".")[:-3], fromlist=["x"])
+        )
+        assert "skills_context_from_config(" in source, module_path
+        assert "_startup_skills_context" not in source, module_path

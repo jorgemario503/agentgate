@@ -31,7 +31,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Protocol
 
 import yaml
 
@@ -278,6 +278,44 @@ def _blank_entry(skill_dir: Path) -> SkillEntry:
 
 def _fingerprint_bytes(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
+
+
+class SkillsConfig(Protocol):
+    """The process configuration a skills context is built from.
+
+    Structural (duck-typed) on purpose: ``core.skills`` must not import
+    ``core.config``, and a test or the eval harness must be able to pass a
+    namespace. Naming the four fields once here means the runners and the bots
+    cannot disagree about what "the skills configuration" is — which is exactly
+    how the startup banner and the runner's own context could drift apart.
+    """
+
+    AGENTGATE_SKILLS_ENABLED: bool
+    AGENTGATE_SKILLS_DIR: str
+    AGENTGATE_SKILLS_MANIFEST_TOKENS: int
+    AGENTGATE_SKILLS_SELECTION_MODE: str
+
+
+def skills_context_from_config(config: "SkillsConfig | object") -> "SkillsContext":
+    """Build the skills context a runner will use, from process config.
+
+    The runners and the bots each need this: the runners to wire the catalog, the
+    bots to report it at startup. Building it in one place means the startup
+    banner describes what a turn will actually do, not a parallel guess.
+
+    Tolerant by design -- a missing attribute falls back to the documented
+    default rather than raising, because a startup banner must never be the
+    thing that stops a bot from starting.
+    """
+    def _get(name: str, default):
+        return getattr(config, name, default)
+
+    return build_skills_context(
+        enabled=bool(_get("AGENTGATE_SKILLS_ENABLED", False)),
+        skills_dir=_get("AGENTGATE_SKILLS_DIR", "skills"),
+        manifest_tokens=int(_get("AGENTGATE_SKILLS_MANIFEST_TOKENS", 600)),
+        selection_mode=_get("AGENTGATE_SKILLS_SELECTION_MODE", "model"),
+    )
 
 
 def resolve_skills_dir(skills_dir: "str | os.PathLike | None") -> "str | None":
