@@ -28,7 +28,7 @@ from core.config import (
     CLAUDE_SETTINGS,
     SDK_ALLOWED_TOOLS,
 )
-from core.agentdb import AgentDBSurface
+from core.agentdb import AgentDBSurface, prune_session_directories
 from core.context.cache_key import cache_key_kwargs, retry_without_cache_key
 from core.history import JsonFileHistoryStore
 from core.prompts import (
@@ -113,8 +113,10 @@ def _extract_files(text: str) -> list[str]:
     return _re.findall(r'(?:[\w./\-]+/[\w.\-]+\.\w{1,6}|/[\w./\-]+\.\w{1,6})', text)
 
 
-def _extract_dirs(text: str) -> list[str]:
-    return _re.findall(r'/(?:[\w./\-]+/)+', text)
+def _extract_dirs(text: str, workspace_path: str = "") -> list[str]:
+    """Directories the turn mentions that actually exist (see core.context)."""
+    from core.context.dir_evidence import extract_existing_dirs
+    return extract_existing_dirs(text, workspace_path=workspace_path)
 
 
 def resolve_model(value: str | None) -> ModelSpec:
@@ -1099,6 +1101,9 @@ class FireworksRunner:
 
                 memory_context = None
                 if self._agentdb_middleware is not None:
+                    # Entries whose directory is gone would otherwise be
+                    # re-injected as "session directories" every turn.
+                    prune_session_directories(self._agentdb_middleware, thread_id)
                     messages, _ = await self._agentdb_middleware.prepare_turn_async(
                         user_query=prompt,
                         session_id=thread_id,
@@ -1141,7 +1146,7 @@ class FireworksRunner:
 
                 response_text = "\n".join(text_parts).strip()
                 if self._agentdb_middleware is not None:
-                    dirs = _extract_dirs(response_text)
+                    dirs = _extract_dirs(response_text, workspace_path)
                     files = _extract_files(response_text)
                     self._agentdb_middleware.report_directories(thread_id, dirs)
                     turn_num = self._turn_counters.get(thread_id, 0)

@@ -117,6 +117,47 @@ def build_consolidation_llm_fn(provider: str) -> Any:
         return None
 
 
+def prune_session_directories(middleware: Any, session_id: str) -> int:
+    """Drop dead entries from the session's directory list; return how many.
+
+    The directory list is re-injected into the model's context every turn, and
+    agentdb keeps it until the 200-entry cap evicts it by age. A long session
+    therefore accumulates paths for scratch directories that were deleted —
+    each of which costs the model a line of context and a moment of "is that
+    supposed to still be there?".
+
+    agentdb owns the block's rendering, so the honest place to fix the *read*
+    side is to trim the state we hand it. Entries are re-checked with
+    ``os.path.isdir`` immediately before injection. Non-elevated records only:
+    an elevated record is a deliberate, persisted grant and is never dropped
+    because the directory happens to be absent right now.
+
+    Never raises; on any unexpected shape it leaves the state untouched.
+    """
+    try:
+        from core.context.dir_evidence import prune_existing_dirs
+
+        records = getattr(middleware, "_session_dir_state", {}).get(session_id)
+        if not records:
+            return 0
+        kept = []
+        dropped = 0
+        for record in records:
+            path = getattr(record, "path", None)
+            if getattr(record, "elevated", False):
+                kept.append(record)
+                continue
+            if path and prune_existing_dirs([path]):
+                kept.append(record)
+            else:
+                dropped += 1
+        if dropped:
+            middleware._session_dir_state[session_id] = kept
+        return dropped
+    except Exception:
+        return 0
+
+
 class AgentDBSurface:
     """Forwards the shared AgentDB query calls to a middleware instance."""
 
