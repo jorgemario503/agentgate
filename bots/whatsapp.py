@@ -43,6 +43,7 @@ import uvicorn
 import core.approvals as approvals
 import core.commands as commands
 import core.config as config
+from core.skills import skills_startup_report
 from core.sessions import (
     SessionStore, classify_session, idle_notified_at, wants_claude_settings,
 )
@@ -139,6 +140,25 @@ async def _start_wppconnect_session():
 # ---------------------------------------------------------------------------
 # Core flow
 # ---------------------------------------------------------------------------
+
+def _startup_skills_context():
+    """The skills context as the runners will build it, for the startup banner.
+
+    Built from the same config the runners read, so the banner reports what a
+    turn will actually do rather than a separate guess. Never raises.
+    """
+    from core.skills import build_skills_context
+    try:
+        return build_skills_context(
+            enabled=bool(getattr(config, "AGENTGATE_SKILLS_ENABLED", False)),
+            skills_dir=getattr(config, "AGENTGATE_SKILLS_DIR", "skills"),
+            manifest_tokens=int(getattr(config, "AGENTGATE_SKILLS_MANIFEST_TOKENS", 600)),
+            selection_mode=getattr(config, "AGENTGATE_SKILLS_SELECTION_MODE", "model"),
+        )
+    except Exception:
+        from core.skills import EMPTY_CATALOG, SkillsContext
+        return SkillsContext(False, EMPTY_CATALOG, "", "model", ())
+
 
 async def _run_and_reply(phone: str, prompt: str, workspace_path: str, resume_session_id: str | None):
     thread_id = phone
@@ -275,6 +295,9 @@ async def lifespan(app: FastAPI):
     # never reaches the agent. Say why, once, at startup. Same line as the
     # Slack and Telegram banners, so the three platforms report config alike.
     for _line in config.additional_dirs_report():
+        print(f"[startup] {_line}")
+    # Skills fail quietly on purpose; report the resolved configuration once.
+    for _line in skills_startup_report(_startup_skills_context()):
         print(f"[startup] {_line}")
 
     yield

@@ -545,6 +545,9 @@ class SkillsContext:
     manifest: str
     mode: str
     diagnostics: tuple[str, ...] = ()
+    #: What the operator asked for, kept so a fallback can be reported rather
+    #: than silently applied. Empty when skills are disabled.
+    requested_mode: str = ""
 
 
 def build_skills_context(
@@ -561,17 +564,66 @@ def build_skills_context(
     discovery problem (discovery itself never raises; this is belt-and-braces).
     """
     if not enabled:
-        return SkillsContext(False, EMPTY_CATALOG, "", selection_mode, ())
+        return SkillsContext(False, EMPTY_CATALOG, "", selection_mode, (),
+                            requested_mode=selection_mode or "")
     try:
         catalog = discover(skills_dir)
     except Exception as e:  # discovery is written not to raise; never take the runner down
-        return SkillsContext(False, EMPTY_CATALOG, "", selection_mode, (f"skill discovery failed: {e.__class__.__name__}",))
+        return SkillsContext(
+            False, EMPTY_CATALOG, "", selection_mode,
+            (f"skill discovery failed: {e.__class__.__name__}",),
+            requested_mode=selection_mode or "",
+        )
     if not catalog.entries:
         # No usable skills: behave exactly as disabled.
-        return SkillsContext(False, catalog, "", selection_mode, catalog.diagnostics)
+        return SkillsContext(
+            False, catalog, "", selection_mode, catalog.diagnostics,
+            requested_mode=selection_mode or "",
+        )
     manifest = build_manifest(catalog, max_tokens=manifest_tokens)
     mode = selection_mode if selection_mode in ("model", "recommend") else "model"
-    return SkillsContext(True, catalog, manifest, mode, catalog.diagnostics)
+    return SkillsContext(
+        True, catalog, manifest, mode, catalog.diagnostics,
+        requested_mode=selection_mode or "",
+    )
+
+
+def skills_startup_report(context: "SkillsContext") -> list[str]:
+    """Operator-facing lines describing how skills resolved at startup.
+
+    Skills fail quietly by design: an invalid skill is excluded, an unknown
+    selection mode falls back, a missing directory yields an empty catalog. That
+    is right for a request path — a bad skill file must never cost a turn — but
+    it leaves the operator with no way to see that their configuration did not
+    take effect. These lines are printed once at startup, in the same shape as
+    ``core.config.additional_dirs_report``.
+
+    Returns an empty list when skills are disabled: nothing was consulted, so
+    there is nothing to report.
+    """
+    if not context.enabled and not context.diagnostics:
+        # Nothing was consulted, or nothing went wrong: no report. When the
+        # catalog is empty *because* skills were rejected, the diagnostics are
+        # the whole point and must still be shown.
+        return []
+
+    lines: list[str] = []
+    lines.append(
+        f"Skills: {len(context.catalog.entries)} available "
+        f"({', '.join(e.name for e in context.catalog.entries)}), mode '{context.mode}'"
+    )
+
+    # An unrecognised selection mode silently becomes "model". Say so rather than
+    # letting a typo look like a deliberate choice.
+    if context.requested_mode and context.requested_mode != context.mode:
+        lines.append(
+            f"Skills: selection mode {context.requested_mode!r} is not recognised "
+            f"(use 'model' or 'recommend') -- falling back to '{context.mode}'"
+        )
+
+    for diagnostic in context.diagnostics:
+        lines.append(f"Skills: {diagnostic}")
+    return lines
 
 
 # ---------------------------------------------------------------------------

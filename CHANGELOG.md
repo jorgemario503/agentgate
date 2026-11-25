@@ -6,6 +6,12 @@ project's release practice.
 
 ## [Unreleased]
 
+### Removed
+- **`skills/example-summarize/`** — a sample template that nobody invoked. It had
+  no `metadata.agentgate.triggers`, so Mode B could never surface it, and it
+  listed as an available skill in every session's manifest. Kept in
+  `_archive/skills-legacy/` rather than deleted. The three role skills remain.
+
 ### Added
 - **`core/injection.py` — turn context has a declared owner and a declared
   scope.** Three copies of the same assembly lived in the open-model runners and
@@ -17,6 +23,16 @@ project's release practice.
   contradicts it raises rather than letting the table become a lie.
 
 ### Fixed
+- **A misconfigured skills setup is now visible at startup.** Skills fail quietly
+  by design — an invalid `SKILL.md` is excluded, an unrecognised
+  `AGENTGATE_SKILLS_SELECTION_MODE` falls back to `model`, a missing directory
+  yields an empty catalog — which is right for a request path but leaves the
+  operator unable to see that their configuration did not take effect. All three
+  bots now print the resolved catalog and mode once at startup, plus a warning
+  when the selection mode was not recognised and any per-skill discovery
+  diagnostic, in the same shape as `ADDITIONAL_DIRS` reporting. A typo such as
+  `AGENTGATE_SKILLS_SELECTION_MODE=recomend` previously ran Mode A with no
+  indication at all.
 - **The repo map is injected once per session, as documented — not every turn.**
   The cache added earlier avoided rebuilding the map but not re-*sending* it:
   the text was written into a turn-local variable on every turn. Scope is now

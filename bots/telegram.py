@@ -27,6 +27,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, ContextTyp
 import core.approvals as approvals
 import core.commands as commands
 import core.config as config
+from core.skills import skills_startup_report
 from core.sessions import (
     SessionStore, classify_session, idle_notified_at, wants_claude_settings,
 )
@@ -391,6 +392,25 @@ async def handle_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Startup
 # ---------------------------------------------------------------------------
 
+def _startup_skills_context():
+    """The skills context as the runners will build it, for the startup banner.
+
+    Built from the same config the runners read, so the banner reports what a
+    turn will actually do rather than a separate guess. Never raises.
+    """
+    from core.skills import build_skills_context
+    try:
+        return build_skills_context(
+            enabled=bool(getattr(config, "AGENTGATE_SKILLS_ENABLED", False)),
+            skills_dir=getattr(config, "AGENTGATE_SKILLS_DIR", "skills"),
+            manifest_tokens=int(getattr(config, "AGENTGATE_SKILLS_MANIFEST_TOKENS", 600)),
+            selection_mode=getattr(config, "AGENTGATE_SKILLS_SELECTION_MODE", "model"),
+        )
+    except Exception:
+        from core.skills import EMPTY_CATALOG, SkillsContext
+        return SkillsContext(False, EMPTY_CATALOG, "", "model", ())
+
+
 async def main(backend: str = "claude", model: str | None = None, bot_name: str | None = None):
     token = configure_bot(bot_name)
     runner = await select_runner(backend, model)
@@ -421,6 +441,10 @@ async def main(backend: str = "claude", model: str | None = None, bot_name: str 
     # A refused or dangling entry is otherwise invisible: the directory simply
     # never reaches the agent. Say why, once, at startup.
     for _line in config.additional_dirs_report():
+        print(f"[startup] {_line}")
+    # Skills fail quietly on purpose (an excluded skill or a fallback mode must
+    # never cost a turn), which also hides a misconfiguration. Report once here.
+    for _line in skills_startup_report(_startup_skills_context()):
         print(f"[startup] {_line}")
     print(f"[startup] Approval timeout: {config.APPROVAL_TIMEOUT_SECONDS}s")
 

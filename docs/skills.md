@@ -130,4 +130,4 @@ cohorts cannot contaminate each other.
 | `core/config.py` | `AGENTGATE_SKILLS_*` flags |
 | `runners/{local,fireworks,deepinfra}.py` | Call the catalog at client build |
 | `scripts/eval_skills.py` | Isolated OFF/A/B/C evaluation harness |
-| `skills/example-summarize/` | Sample skill template |
+| `skills/{milestone-implement,milestone-review,product-spec-driven}/` | The shipped role skills |

@@ -268,3 +268,68 @@ class TestSessionLifecycle(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# -- startup reporting ------------------------------------------------------
+
+
+def test_startup_report_lists_catalog_and_mode():
+    """An operator must be able to see what skills resolved."""
+    from core.skills import build_skills_context, skills_startup_report
+
+    ctx = build_skills_context(enabled=True, skills_dir="skills",
+                               manifest_tokens=600, selection_mode="model")
+    lines = skills_startup_report(ctx)
+    assert lines
+    assert "mode 'model'" in lines[0]
+    for entry in ctx.catalog.entries:
+        assert entry.name in lines[0]
+
+
+def test_startup_report_warns_on_an_unrecognised_mode():
+    """A typo used to fall back to Mode A invisibly."""
+    from core.skills import build_skills_context, skills_startup_report
+
+    ctx = build_skills_context(enabled=True, skills_dir="skills",
+                               manifest_tokens=600, selection_mode="recomend")
+    lines = skills_startup_report(ctx)
+    joined = "\n".join(lines)
+    assert "recomend" in joined, "the bad value is not reported"
+    assert "falling back to 'model'" in joined
+    # The resolved mode is still reported on its own line.
+    assert any("mode 'model'" in line for line in lines)
+
+
+def test_startup_report_is_silent_when_skills_are_disabled():
+    """Disabled consults nothing, so there is nothing to report."""
+    from core.skills import build_skills_context, skills_startup_report
+
+    ctx = build_skills_context(enabled=False, skills_dir="skills",
+                               manifest_tokens=600, selection_mode="model")
+    assert skills_startup_report(ctx) == []
+
+
+def test_startup_report_surfaces_discovery_diagnostics(tmp_path):
+    """An excluded skill is otherwise invisible: it simply never appears."""
+    from core.skills import build_skills_context, skills_startup_report
+
+    root = tmp_path / "skills"
+    bad = root / "broken-skill"
+    bad.mkdir(parents=True)
+    (bad / "SKILL.md").write_text("---\nname: broken-skill\n---\nno description\n")
+
+    ctx = build_skills_context(enabled=True, skills_dir=str(root),
+                               manifest_tokens=600, selection_mode="model")
+    joined = "\n".join(skills_startup_report(ctx))
+    assert "description" in joined.lower(), f"diagnostic not surfaced: {joined!r}"
+
+
+def test_bots_report_skills_at_startup():
+    """All three bots print the report, like they do for ADDITIONAL_DIRS."""
+    import inspect
+
+    for module_path in ("bots/slack.py", "bots/telegram.py", "bots/whatsapp.py"):
+        source = inspect.getsource(
+            __import__(module_path.replace("/", ".")[:-3], fromlist=["x"])
+        )
+        assert "skills_startup_report(" in source, f"{module_path} does not report skills"

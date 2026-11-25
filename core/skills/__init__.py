@@ -37,6 +37,7 @@ from core.skills.catalog import (
     # context builder
     SkillsContext,
     build_skills_context,
+    skills_startup_report,
     # recommendations (Mode B)
     Recommendation,
     recommend,
