@@ -1100,6 +1100,17 @@ class FireworksRunner:
                 prompt = invocation.task
 
                 memory_context = None
+                # Where the agent is, and which paths the operator exposed.
+                # Built independently of AgentDB so orientation survives
+                # AGENTDB_ENABLED=false; it is per-session, so it belongs in the
+                # ephemeral context and not the cached system prefix.
+                try:
+                    from core.context.orientation import build_orientation
+                    _orient = build_orientation(workspace_path, ADDITIONAL_DIRS)
+                    if _orient:
+                        memory_context = _orient
+                except Exception:
+                    pass
                 if self._agentdb_middleware is not None:
                     # Entries whose directory is gone would otherwise be
                     # re-injected as "session directories" every turn.

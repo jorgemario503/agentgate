@@ -578,6 +578,46 @@ AGENTGATE_REPO_MAP_ENABLED=true    # master switch (default false)
 AGENTGATE_REPO_MAP_MAX_TOKENS=1500 # size cap for the rendered map
 ```
 
+### What the agent is told at the start of every turn
+
+Independently of the repo map, the open-model runners (`local`, `fireworks`,
+`deepinfra`) inject a short **orientation block** telling the agent where it is:
+
+```
+## Your starting directory
+- Path: agent-sessions/slack/<thread-id>/workspace
+- This is where you start, and where relative paths and `Bash` land.
+- It is a scratch directory for this session. It is normally empty, and it is
+  normally NOT the project the user is asking about.
+- Do not assume the user's code is here. If the task names a location, work
+  there instead; if you cannot tell where the work belongs, ask.
+```
+
+When `ADDITIONAL_DIRS` is set, a **second, separately-titled block** follows it:
+
+```
+## Additional directories available to you
+These are separate from your starting directory. They exist because the user has
+made them available — they are real projects, not scratch space.
+- /Users/me/dev/komper
+- /Users/me/dev/api
+Use one only when the task points at it. A path being listed here does not mean
+you should switch to it: the user's instruction for this task decides where you
+work. Changes here affect a real project.
+```
+
+The two blocks are kept apart on purpose. Collapsing them into one list is what
+causes the failure this section exists to prevent: an agent that cannot tell
+"where I am" from "what I may touch" starts the task in a listed repository
+instead of the one the user named — better-informed than a guess, but still the
+wrong directory.
+
+The second block appears only when at least one **absolute** `ADDITIONAL_DIRS`
+entry exists, so a single-directory setup does not pay for an empty section.
+Both blocks are per-session and therefore travel in the ephemeral per-turn
+context, never in the cached system prefix. They are built regardless of
+`AGENTDB_ENABLED`, so orientation survives with governed memory switched off.
+
 ### Why `ADDITIONAL_DIRS` matters for it
 
 Here is the thing that surprises people: **the session workspace is not your
@@ -596,9 +636,10 @@ work out — which real project you mean. Two mechanisms bridge that gap:
 - **`remember_directory` / `lookup_directory`** — the agent remembers a
   name→path mapping it learns during a session, so it can find it again later.
 
-If neither is set, an agent asked to "look at the Komper repo" has no starting
-point, and will spend turns searching — or, worse, guess and work in the wrong
-tree. Filling `ADDITIONAL_DIRS` is the single highest-value configuration step
+If neither is set, the agent is still told that its starting directory is a
+scratch directory (see the orientation block above) — so it will not silently
+guess — but it has nowhere else to look, so it spends turns searching or has to
+ask. Filling `ADDITIONAL_DIRS` is the single highest-value configuration step
 for multi-repository use.
 
 ```env

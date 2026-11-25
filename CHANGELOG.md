@@ -28,6 +28,18 @@ project's release practice.
   `~` is expanded. Relative entries are still kept verbatim rather than
   resolved against an unrelated process cwd.
 
+### Added
+- **Orientation block on every turn** (`core/context/orientation.py`). The
+  open-model runners now tell the agent where it is: a `## Your starting
+  directory` block naming the session workspace and stating that it is a
+  scratch directory, normally empty and normally not the project under
+  discussion. When `ADDITIONAL_DIRS` is set, a second, separately-titled
+  `## Additional directories available to you` block lists those paths and says
+  explicitly that a listed path does not override the user's instruction for
+  the current task. Keeping the two blocks apart prevents the failure where an
+  agent starts work in a listed repository instead of the one the user named.
+  Built independently of AgentDB, so it survives `AGENTDB_ENABLED=false`.
+
 ### Documentation
 - README: new **"Repo map and `ADDITIONAL_DIRS`"** section — what the map is and
   is not, why the session workspace is not your repository, why
