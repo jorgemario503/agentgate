@@ -262,6 +262,12 @@ async def lifespan(app: FastAPI):
     print(f"[startup] Backend: {backend}")
     print(f"[startup] Blocked patterns: {len(config.BLOCKED_PATTERNS)} rules active")
     print(f"[startup] User allowlist: {WHATSAPP_PLATFORM.allowed_user_ids or 'OPEN TO ALL (set ALLOWED_WHATSAPP_USER_IDS)'}")
+    print(f"[startup] Additional dirs: {config.ADDITIONAL_DIRS or 'none'}")
+    # A refused or dangling entry is otherwise invisible: the directory simply
+    # never reaches the agent. Say why, once, at startup. Same line as the
+    # Slack and Telegram banners, so the three platforms report config alike.
+    for _line in config.additional_dirs_report():
+        print(f"[startup] {_line}")
 
     yield
 
