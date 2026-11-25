@@ -648,19 +648,24 @@ for multi-repository use.
 
 ```env
 # .env — always use ABSOLUTE paths (see below)
+# macOS / Linux:
 ADDITIONAL_DIRS=/Users/me/dev/komper,/Users/me/dev/api-service
+# Windows:
+# ADDITIONAL_DIRS=C:\Users\me\dev\komper,C:\Users\me\dev\api-service
 ```
 
 Prefer **narrow, per-project** entries. Point `ADDITIONAL_DIRS` at each
 repository you want available, not at a parent folder such as
-`/Users/me/dev` or `/`: a parent turns every sibling project into something the
-agent can wander into, and the workspace snapshot that AgentDB injects will
-enumerate the whole tree two levels deep on every turn.
+`/Users/me/dev` or `C:\Users\me\dev` or `/`: a parent turns every sibling
+project into something the agent can wander into, and the workspace snapshot
+that AgentDB injects will enumerate the whole tree two levels deep on every
+turn.
 
 ### Do `ADDITIONAL_DIRS` entries have to be full paths?
 
-**Yes — use absolute paths.** Write `/Users/me/dev/komper`, not
-`~/dev/komper`-relative-to-somewhere or `dev/komper`.
+**Yes — use absolute paths.** Write the complete path from the filesystem root
+(`/Users/me/dev/komper` on macOS/Linux, `C:\Users\me\dev\komper` on Windows),
+not a path relative to wherever you happen to be.
 
 The reason is that a relative path has no reliable meaning here. The process
 current directory is not the session workspace, so a relative entry would
@@ -668,17 +673,35 @@ resolve against an unrelated location and quietly point at the wrong tree (or at
 nothing). Absolute paths mean the same thing from every runner and every
 session.
 
+**Both path styles are understood, on any host.** The validator decides how to
+read a value from how it is *written*, not from the operating system it happens
+to be running on — a Windows path in a shared config is judged by Windows rules
+even when validated on macOS or Linux, and vice versa.
+
 What AgentGate accepts, and what it refuses:
 
 | You write | Result |
 |---|---|
 | `/Users/me/dev/komper` | Accepted. **Recommended.** |
+| `C:\Users\me\dev\komper` | Accepted. Drive letters, `D:\…`, forward slashes (`C:/Users/…`) and UNC paths (`\\server\share\repo`) all work. |
 | `/Users/me/dev/a, /Users/me/dev/b` | Comma-separated; surrounding spaces are trimmed. |
 | `~/dev/komper` | Accepted; `~` is expanded to your home directory. |
 | `dev/komper` | **Refused** — not absolute. Reported at startup. |
-| `/` or `/Users/me` (your home) | **Refused** — too broad. Reported at startup. |
+| `/`, `C:\`, or `\\server\share` | **Refused** — filesystem root. Reported at startup. |
+| `/Users/me` or `C:\Users\me` | **Refused** — a home directory, too broad. Reported at startup. |
 | `/Users/me/dev/*` | **Refused** — shell/glob characters. Reported at startup. |
 | a path that does not exist | **Warning** — kept, so it works once created. |
+
+Two details worth knowing, because they differ between platforms:
+
+- **Case.** Windows paths are compared case-insensitively, so
+  `C:\Users\Me\Dev` and `c:\users\me\dev` are the same entry (the second is
+  reported as a duplicate). POSIX paths are case-sensitive, so `/Users/me/Dev`
+  and `/Users/me/dev` are two different directories and both are kept.
+- **Separators.** A backslash is a path separator, not an escape character, so
+  Windows paths are never mistaken for shell fragments. Other shell characters
+  (`*`, `?`, `$`, `` ` ``, `|`, `&`, `;`, `<`, `>`) are still refused in both
+  styles.
 
 Refused entries are dropped from `ADDITIONAL_DIRS` for every consumer, so the
 Claude allow-list, the AgentDB workspace snapshot and the orientation block

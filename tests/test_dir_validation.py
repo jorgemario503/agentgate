@@ -133,5 +133,68 @@ class ReportTests(unittest.TestCase):
         )
 
 
+class WindowsPathTests(unittest.TestCase):
+    """Windows paths must be judged by Windows rules, on any host.
+
+    The first implementation used ``os.path.isabs``, which on macOS/Linux
+    reports ``C:\\Users\\me\\dev\\komper`` as *relative* — so a perfectly valid
+    Windows path was refused with a misleading "not an absolute path". The
+    validator now picks a dialect from how the value is written.
+    """
+
+    def test_windows_project_paths_accepted(self):
+        for path in (
+            "C:\\Users\\me\\dev\\komper",
+            "C:/Users/me/dev/komper",       # forward slashes are legal on Windows
+            "D:\\dev\\repo",                # any drive, not just C:
+            "\\\\server\\share\\repo",       # UNC
+        ):
+            status, _ = _statuses([path])[0]
+            self.assertEqual(status, ACCEPTED, path)
+
+    def test_windows_drive_root_refused(self):
+        for path in ("C:\\", "c:/"):
+            status, _ = _statuses([path])[0]
+            self.assertEqual(status, FILESYSTEM_ROOT, path)
+
+    def test_windows_home_refused(self):
+        # The Windows home shape, recognisable even when validated on POSIX
+        # (where the real Windows home cannot be discovered).
+        status, _ = _statuses(["C:\\Users\\me"])[0]
+        self.assertEqual(status, HOME_TOO_BROAD)
+
+    def test_windows_subdirectory_of_home_allowed(self):
+        status, _ = _statuses(["C:\\Users\\me\\dev\\komper"])[0]
+        self.assertEqual(status, ACCEPTED)
+
+    def test_windows_duplicates_are_case_insensitive(self):
+        got = _statuses(["C:\\Users\\Me\\Dev\\A", "c:\\users\\me\\dev\\a"])
+        self.assertEqual([s for s, _ in got], [ACCEPTED, DUPLICATE])
+
+    def test_posix_paths_stay_case_sensitive(self):
+        # Lowercasing POSIX paths would collapse two genuinely distinct dirs.
+        got = _statuses(["/Users/me/Dev", "/Users/me/dev"])
+        self.assertEqual([s for s, _ in got], [ACCEPTED, ACCEPTED])
+
+    def test_relative_windows_path_refused(self):
+        for path in ("dev\\komper", ".\\repo", "..\\up"):
+            status, _ = _statuses([path])[0]
+            self.assertEqual(status, RELATIVE, path)
+
+    def test_backslash_is_not_a_shell_fragment(self):
+        # Backslash is the Windows separator; treating it as a shell escape
+        # would refuse every Windows path.
+        status, _ = _statuses(["C:\\Users\\me\\dev\\x"])[0]
+        self.assertNotEqual(status, SHELL_FRAGMENT)
+
+    def test_unc_root_alone_refused(self):
+        status, _ = _statuses(["\\\\server\\share"])[0]
+        self.assertEqual(status, FILESYSTEM_ROOT)
+
+    def test_windows_root_check_does_not_misfire_on_directories(self):
+        status, _ = _statuses(["C:\\dev"])[0]
+        self.assertEqual(status, ACCEPTED)
+
+
 if __name__ == "__main__":
     unittest.main()

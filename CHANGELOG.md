@@ -7,6 +7,15 @@ project's release practice.
 ## [Unreleased]
 
 ### Fixed
+- **`ADDITIONAL_DIRS` validation was POSIX-only.** It used `os.path.isabs` and
+  `os.sep`, so on macOS/Linux every Windows path (`C:\Users\me\dev\komper`) was
+  refused as "not an absolute path", `C:\` was not recognised as a filesystem
+  root, and Windows duplicates were not collapsed. The validator now picks a
+  path dialect from how the value is *written*, so Windows paths are judged by
+  Windows rules on any host and vice versa. Case handling follows the dialect:
+  case-insensitive for Windows (so `C:\Dev` and `c:\dev` are duplicates),
+  case-sensitive for POSIX. A backslash is treated as a separator, not a shell
+  escape.
 - **"Session directories" no longer contains invented paths.** The per-turn
   directory report was a bare regex over the model's free text, so any
   slash-shaped fragment became a directory entry and was re-injected into

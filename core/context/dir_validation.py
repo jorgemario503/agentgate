@@ -28,7 +28,10 @@ turn. Listing the individual repositories is what the feature is for.
 """
 from __future__ import annotations
 
+import ntpath
 import os
+import posixpath
+import re
 from dataclasses import dataclass
 from typing import Iterable
 
@@ -43,7 +46,45 @@ DUPLICATE = "duplicate"
 EMPTY = "empty"
 
 #: Characters that mean the value was not written as a plain path.
+#: Backslash is deliberately NOT here: it is the separator on Windows.
 _SHELL_CHARS = frozenset("*?$`|&;<>\n\r\t")
+
+
+def _dialect_of(text: str):
+    """Pick the path module that matches how the value is *written*.
+
+    The validator must not assume the host OS agrees with the value. A Windows
+    path can appear in configuration read on macOS or Linux (shared .env, a
+    container, a teammate's snippet), and judging it with ``os.path`` there
+    reports it as "not absolute" -- which is both wrong and unhelpful, since the
+    path is perfectly absolute on the machine the operator is describing.
+
+    Detection is deliberately conservative: a drive letter, a UNC prefix, or a
+    backslash anywhere means Windows semantics; otherwise POSIX.
+    """
+    if re.match(r"^[A-Za-z]:[\\/]", text) or text.startswith("\\\\") or "\\" in text:
+        return ntpath
+    return posixpath
+
+
+def _is_root(path: str) -> bool:
+    """True for "/" on POSIX and for a bare drive/UNC root on Windows.
+
+    ``os.sep`` cannot be used: on Windows it is a backslash, so comparing a
+    POSIX-style "/" would miss, and on POSIX a drive root would never be seen.
+    A drive root is "C:\\" (nothing after the drive); "C:\\Users" is not a root.
+    A UNC root is "\\\\server\\share" with no path after the share.
+    """
+    mod = _dialect_of(path)
+    norm = mod.normpath(path)
+    if mod is ntpath:
+        drive, rest = mod.splitdrive(norm)
+        if norm.startswith("\\\\"):
+            # UNC: root only when the share has no trailing component.
+            parts = [p for p in norm.split("\\") if p]
+            return len(parts) <= 2
+        return bool(drive) and rest in ("", "\\", "/")
+    return norm == "/"
 
 
 @dataclass(frozen=True)
@@ -81,7 +122,7 @@ def check_additional_dirs(
     Never raises: an entry that cannot even be inspected is reported as
     ``empty`` rather than aborting validation.
     """
-    home_path = os.path.normpath(os.path.expanduser(home or "~"))
+    homes = _home_variants(home)
     results: list[DirCheck] = []
     seen: set[str] = set()
 
@@ -98,6 +139,7 @@ def check_additional_dirs(
             continue
 
         path = os.path.expanduser(text)
+        mod = _dialect_of(path)
 
         if any(ch in path for ch in _SHELL_CHARS):
             results.append(
@@ -108,7 +150,7 @@ def check_additional_dirs(
             )
             continue
 
-        if not os.path.isabs(path):
+        if not mod.isabs(path):
             results.append(
                 DirCheck(
                     text, path, RELATIVE,
@@ -118,9 +160,9 @@ def check_additional_dirs(
             )
             continue
 
-        path = os.path.normpath(path)
+        path = mod.normpath(path)
 
-        if path == os.sep:
+        if _is_root(path):
             results.append(
                 DirCheck(
                     text, path, FILESYSTEM_ROOT,
@@ -129,7 +171,7 @@ def check_additional_dirs(
             )
             continue
 
-        if path == home_path:
+        if _normalise_for_home(path, homes):
             results.append(
                 DirCheck(
                     text, path, HOME_TOO_BROAD,
@@ -139,12 +181,13 @@ def check_additional_dirs(
             )
             continue
 
-        if path in seen:
+        key = _dedupe_key(path)
+        if key in seen:
             results.append(
                 DirCheck(text, path, DUPLICATE, "already listed earlier")
             )
             continue
-        seen.add(path)
+        seen.add(key)
 
         if exists and not os.path.isdir(path):
             results.append(
@@ -159,6 +202,58 @@ def check_additional_dirs(
         results.append(DirCheck(text, path, ACCEPTED, ""))
 
     return results
+
+
+def _home_variants(home: str) -> list[str]:
+    """Home directory under both dialects, normalised.
+
+    The host's ``~`` is the primary answer, but a Windows home written into the
+    same configuration file must also be recognised when validated on POSIX.
+    """
+    out: list[str] = []
+    try:
+        primary = os.path.expanduser(home or "~")
+    except Exception:
+        primary = ""
+    candidates = [primary]
+    if home:
+        candidates.append(home)
+    for c in candidates:
+        if not c:
+            continue
+        mod = _dialect_of(c)
+        out.append(mod.normcase(mod.normpath(c)))
+    # The Windows home is not discoverable from POSIX, so an explicit
+    # C:\Users\<name> is matched structurally below rather than by string.
+    return out
+
+
+def _normalise_for_home(path: str, homes: list[str]) -> bool:
+    """Whether ``path`` is one of the home directories (or a Windows home shape)."""
+    mod = _dialect_of(path)
+    norm = mod.normcase(mod.normpath(path))
+    if norm in homes:
+        return True
+    # A drive-rooted "X:\Users\<name>" with exactly one segment after Users is
+    # the Windows home shape; accept it as "too broad" even on POSIX, where the
+    # real home is unknowable.
+    if mod is ntpath:
+        drive, rest = mod.splitdrive(norm)
+        parts = [p for p in rest.replace("/", "\\").split("\\") if p]
+        if len(parts) == 2 and parts[0].lower() == "users":
+            return True
+    return False
+
+
+def _dedupe_key(path: str) -> str:
+    """Comparison key: case-insensitive on Windows, exact on POSIX.
+
+    Windows paths are case-insensitive, so ``C:\\Dev`` and ``c:\\dev`` are the
+    same directory; POSIX paths are not, so lowercasing there would wrongly
+    collapse distinct directories.
+    """
+    mod = _dialect_of(path)
+    return mod.normcase(mod.normpath(path))
 
 
 def usable_dirs(checks: Iterable[DirCheck]) -> list[str]:
