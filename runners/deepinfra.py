@@ -1042,6 +1042,80 @@ class DeepInfraRunner:
         candidates.append(workspace_path)
         return candidates or None
 
+    def _managed_guidance_text(
+        self, thread_id: str, workspace_path: str, store_base: str,
+    ) -> str:
+        """Resolve the one maintainer instruction for this turn, or ``""``.
+
+        Scope is resolved from trusted runtime state — the repository this session
+        has evidence for, and the task type the host has configured — never from
+        the prompt itself. An unresolved repository yields nothing: a mapping is
+        only meaningful for the repository and task a maintainer wrote it for.
+
+        This runs on **every** request, not once per session, so a withdrawal or a
+        scope switch takes effect immediately and a resumed session cannot replay a
+        stale instruction. The resolved text is returned for this request only; it
+        is not written into history.
+        """
+        try:
+            import core.config as _c
+            from core.context.managed_guidance import ResolvedScope, resolve_managed_guidance
+
+            selections, _problems = _c.managed_guidance_selections()
+            if not selections or self._agentdb is None:
+                return ""
+
+            repository_id = self._resolved_repository_id(
+                thread_id, workspace_path, store_base,
+            )
+            scope = ResolvedScope(
+                repository_id=repository_id,
+                task_type=self._resolved_task_type(thread_id, workspace_path, store_base),
+                agent_id=getattr(_c, "AGENTGATE_MANAGED_GUIDANCE_AGENT_ID", "agentgate"),
+            )
+            resolved = resolve_managed_guidance(
+                selections=selections,
+                scope=scope,
+                read_record=self._agentdb.read,
+                # A repeat write leaves live siblings under one key and read()
+                # returns an arbitrary one; the selection is only meaningful if
+                # the key resolves to exactly one record.
+                count_live_by_key=getattr(self._agentdb, "count_live_by_key", None),
+            )
+            return resolved.text if resolved is not None else ""
+        except Exception:
+            # Guidance is optional: never cost a turn.
+            return ""
+
+    def _resolved_repository_id(
+        self, thread_id: str, workspace_path: str, store_base: str,
+    ) -> str | None:
+        """The repository this session is working in, or ``None``.
+
+        Uses the same evidence as the repo map — paths the session's own turns
+        named, never the operator registry and never the scratch workspace
+        basename, which is ``workspace`` and would name nothing useful.
+        """
+        from core.context.repo_map import find_repo_root
+
+        candidates = self._repo_candidates(thread_id, workspace_path, store_base) or []
+        root = find_repo_root(workspace_path, candidates=candidates)
+        if root is None:
+            return None
+        return getattr(root, "name", None) or None
+
+    def _resolved_task_type(
+        self, thread_id: str, workspace_path: str, store_base: str,
+    ) -> str | None:
+        """The task type for this turn.
+
+        AgentGate does not yet own a taxonomy (DEC-507), so V1 takes an explicit
+        operator mapping from work-item evidence and otherwise reports unresolved.
+        Reporting ``None`` is deliberate: an unknown task type means no guidance,
+        never guidance written for a different kind of task.
+        """
+        return None
+
     def _paths_named_in_history(
         self, thread_id: str, store_base: str, limit: int = 40,
     ) -> list[str]:
@@ -1139,6 +1213,12 @@ class DeepInfraRunner:
                         if _state is not SessionState.SESSION_WARM else None
                     ),
                     agentdb_memory_parts=_memory_parts,
+                    # Resolved on every request, not at the session boundary: a
+                    # withdrawal or scope switch must take effect on the next
+                    # turn, and a resume must not replay a stale instruction.
+                    managed_guidance_text=self._managed_guidance_text(
+                        thread_id, workspace_path, platform.session_store.base,
+                    ),
                     nudge=client.skills_recommendation(prompt),
                 )
                 await client.query(

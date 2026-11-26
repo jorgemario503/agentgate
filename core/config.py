@@ -140,6 +140,58 @@ AGENTDB_ENABLED = os.environ.get("AGENTDB_ENABLED", "true").lower() in ("true", 
 #   (requires: pip install 'agentdatabase[local-embed]')
 AGENTDB_MEMORY_DIR = os.environ.get("AGENTDB_MEMORY_DIR", "agentdb-workspace")
 AGENTDB_PERMISSIONS_PATH = os.environ.get("AGENTDB_PERMISSIONS_PATH", "permissions.yaml")
+# -------------------------
+# Managed repository guidance (opt-in, default off)
+# -------------------------
+# A maintainer maps an exact repository + task type to one AgentDB record key:
+#   AGENTGATE_MANAGED_GUIDANCE=komper:bug_fix:memory/guidance/komper/bug-fix
+# The instruction is read with AgentDB.read() (so its read policy applies), the
+# record's own scope must match exactly, and at most one instruction is sent per
+# turn through the ephemeral context. Removing an entry withdraws the guidance on
+# the next request. Empty means the feature is off.
+AGENTGATE_MANAGED_GUIDANCE = os.environ.get("AGENTGATE_MANAGED_GUIDANCE", "")
+AGENTGATE_MANAGED_GUIDANCE_AGENT_ID = os.environ.get(
+    "AGENTGATE_MANAGED_GUIDANCE_AGENT_ID", "agentgate",
+)
+
+
+def managed_guidance_selections():
+    """Parsed selections, and the entries that could not be parsed.
+
+    Returns ``(selections, problems)``. Reported at startup like ADDITIONAL_DIRS:
+    a typo in one mapping should be visible, not silently reduce guidance to
+    nothing.
+    """
+    from core.context.managed_guidance import parse_selections
+
+    raw = AGENTGATE_MANAGED_GUIDANCE or ""
+    selections = parse_selections(raw)
+    entries = [e.strip() for e in raw.split(",") if e.strip()]
+    problems = []
+    if len(selections) != len(entries):
+        parsed_keys = {(s.repository_id, s.task_type, s.record_key) for s in selections}
+        for entry in entries:
+            parts = entry.split(":", 2)
+            if len(parts) != 3 or not all(p.strip() for p in parts):
+                problems.append(
+                    f"managed guidance {entry!r}: expected repository:task_type:record_key"
+                )
+    return selections, problems
+
+
+def managed_guidance_report():
+    """Startup lines describing the managed-guidance configuration."""
+    selections, problems = managed_guidance_selections()
+    lines = []
+    if selections:
+        lines.append(f"Managed guidance: {len(selections)} selection(s)")
+        for s in selections:
+            lines.append(
+                f"  {s.repository_id}:{s.task_type} -> {s.record_key}"
+            )
+    for problem in problems:
+        lines.append(problem)
+    return lines
 # Consolidation synthesis (llm_fn): OFF by default. When enabled AND a
 # consolidation model is configured ({PREFIX}_CONSOLIDATION_MODEL or a global
 # CONSOLIDATION_MODEL), AgentGate passes an llm_fn to end_session so consolidation

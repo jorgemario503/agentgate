@@ -103,6 +103,10 @@ ASSET_SCOPES: dict[str, InjectionScope] = {
     # record recalled *for this question*. The other three describe the session
     # or the workspace, so they belong to the boundary.
     "memory_records": InjectionScope.EVERY_TURN,
+    # Maintainer-managed guidance: one configured record per repository+task.
+    # Resolved on every request, never cached, so a withdrawal or scope switch
+    # takes effect on the next turn.
+    "managed_guidance": InjectionScope.EVERY_TURN,
     "compaction_summary": InjectionScope.SESSION_RESUME,
     "compaction_checkpoint": InjectionScope.NEVER,
     "workspace": InjectionScope.SESSION_BOUNDARY,
@@ -279,6 +283,7 @@ class TurnInjections:
 #: text via prompt files, never these.
 ORIENTATION_HEADING = ""      # build_orientation emits its own two headings
 MEMORY_RECORDS_HEADING = "## Relevant memory for this turn"
+MANAGED_GUIDANCE_HEADING = "## Repository guidance for this task"
 COMPACTION_HEADING = "## Summary of earlier work in this session"
 
 
@@ -372,6 +377,26 @@ def compaction_summary_injection(parts: Iterable[str]) -> Optional[Injection]:
     )
 
 
+def managed_guidance_injection(text: str, *, record_key: str = "") -> Optional[Injection]:
+    """One maintainer-managed instruction for this turn.
+
+    Emitted only when the host resolved a matching selection *and* AgentDB allowed
+    the read *and* the record's own scope matched. This function adds no decision
+    of its own: it renders what was resolved, so a caller cannot accidentally
+    broaden applicability here.
+    """
+    body = (text or "").strip()
+    if not body:
+        return None
+    return Injection(
+        source="agentdb",
+        asset="managed_guidance",
+        heading=MANAGED_GUIDANCE_HEADING,
+        body=body,
+        scope=ASSET_SCOPES["managed_guidance"],
+    )
+
+
 def split_memory_parts(
     parts: Iterable[str],
 ) -> tuple[list[str], list[str], list[str]]:
@@ -458,6 +483,7 @@ def build_turn_injections(
     additional_dirs: Optional[Iterable[str]] = None,
     repo_candidates: Optional[list[str]] = None,
     agentdb_memory_parts: Optional[Iterable[str]] = None,
+    managed_guidance_text: str = "",
     nudge: str = "",
 ) -> TurnInjections:
     """Assemble every injection for one turn.
@@ -484,6 +510,11 @@ def build_turn_injections(
         injections.add(orientation_injection(workspace_path, additional_dirs))
         if repo_candidates is not None:
             injections.add(repo_map_injection(workspace_path, candidates=repo_candidates))
+
+    if (managed_guidance_text or "").strip():
+        # Rendered first among AgentDB assets: a maintainer's instruction is the
+        # most specific thing a turn can carry, so it precedes recalled memory.
+        injections.add(managed_guidance_injection(managed_guidance_text))
 
     if agentdb_memory_parts:
         per_turn, resume_only, _discarded = split_memory_parts(agentdb_memory_parts)
