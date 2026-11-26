@@ -38,7 +38,7 @@ from __future__ import annotations
 #: Distribution version, mirrored from pyproject.toml. Kept here so a consumer can
 #: assert which contract it is running against without reading package metadata.
 #: A test asserts this equals pyproject.toml's version.
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 from core.handoff.submit import SubmitError, submit_handoff
 from core.handoff.usage import (

@@ -89,6 +89,9 @@ copy is canonical, index persists across restart, scoped per session+workspace
 messages never change (prefix-stable). Composes with compression: a duplicate
 short-circuits to the pointer; a first occurrence goes through compression.
 
+> **Source of truth:** [`injection-ground-truth.md`](injection-ground-truth.md). This page
+> goes deeper on the repo map; it is one asset among several.
+
 ## Repository map (C3, optional)
 
 When `AGENTGATE_REPO_MAP_ENABLED=true`, AgentGate injects a small, deterministic

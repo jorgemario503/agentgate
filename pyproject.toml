@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 # "agentgate" is taken on PyPI by an unrelated project (bestagents/omniagents),
 # so the distribution is published under its own name (DEC-401 follow-up).
 name = "agentgaterunner"
-version = "0.3.0"
+version = "0.3.1"
 description = "Open-model agent runners with platform bots, plus the handoff contract consumed by agentorchestrator"
 readme = "README.md"
 requires-python = ">=3.9"
