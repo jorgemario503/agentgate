@@ -557,6 +557,10 @@ opt-in live model probes and how to run them safely, see
 
 ---
 
+> **What gets injected, and when:** [`docs/injection-ground-truth.md`](docs/injection-ground-truth.md)
+> is the single source of truth — every context asset, which backend receives it, and
+> which session event triggers it. The sections below expand it.
+
 ## Repo map and `ADDITIONAL_DIRS`
 
 ### What the repo map is

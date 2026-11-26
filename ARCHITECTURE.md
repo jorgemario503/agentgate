@@ -152,6 +152,11 @@ only when absent silently discarded every freshly built prompt.
 
 ### Turn context injection
 
+> **Source of truth:** [`docs/injection-ground-truth.md`](docs/injection-ground-truth.md) holds
+> the complete asset table, the ownership rule (agentdb generates, AgentGate decides
+> prevalence), the open-model/Claude and Slack/Telegram/WhatsApp splits, and the compression
+> matrix. This section expands it; where they differ, the ground truth wins.
+
 `core/injection.py` decides what extra context a turn carries. Producers emit
 `Injection` values declaring a `source` (ownership), an `asset`, and a scope;
 `TurnInjections` filters by the turn's session state and composes each block

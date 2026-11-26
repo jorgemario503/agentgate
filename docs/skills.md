@@ -13,6 +13,9 @@ testing. For a copy-paste quick start, see the "Skills" section of the
 > for the open-model runners. With `AGENTGATE_SKILLS_ENABLED=false` (the default)
 > nothing here is consulted and outbound requests are byte-for-byte unchanged.
 
+> **Source of truth:** [`injection-ground-truth.md`](injection-ground-truth.md) —
+> the asset table and the per-backend split. This page goes deeper on skills.
+
 ## How it works
 
 1. **Catalog discovery (read-only, offline).** At client build time each runner
