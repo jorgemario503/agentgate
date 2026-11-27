@@ -160,19 +160,51 @@ AGENTGATE_MANAGED_GUIDANCE = os.environ.get("AGENTGATE_MANAGED_GUIDANCE", "")
 AGENTGATE_MANAGED_GUIDANCE_AGENT_ID = os.environ.get(
     "AGENTGATE_MANAGED_GUIDANCE_AGENT_ID", "agentgate",
 )
-# The host states the scope explicitly. This slice has no taxonomy and no
-# repository inference: an operator who wants guidance binds one repository and one
-# task type to this runner, e.g.
+# The scope is bound **per work item**, not per process.
+#
+# A single process-wide `repository:task` setting cannot serve a shared bot: if the
+# bot handles sessions for komper and for another repository, a process-wide binding
+# sends komper's instruction to both. The binding is therefore looked up per work
+# item, and a session with no matching binding receives no guidance.
+#
+# V1 is a dedicated worker: one repository and one task type, stated explicitly.
+# There is no taxonomy and no inference — an unset binding means the scope is
+# unresolved, which means no guidance, never "match any repository" or "infer it
+# from whatever the session mentioned".
+#
 #   AGENTGATE_MANAGED_GUIDANCE_REPOSITORY=komper
 #   AGENTGATE_MANAGED_GUIDANCE_TASK_TYPE=bug_fix
-# Unset means the scope is unresolved, and unresolved means no guidance — never
-# "match any repository" or "infer it from whatever the session mentioned".
+#
+# `DEDICATED` is the only V1 mode: this worker serves that repository and task, and
+# refuses guidance for any other work item it is asked to handle.
 AGENTGATE_MANAGED_GUIDANCE_REPOSITORY = os.environ.get(
     "AGENTGATE_MANAGED_GUIDANCE_REPOSITORY", "",
 ).strip()
 AGENTGATE_MANAGED_GUIDANCE_TASK_TYPE = os.environ.get(
     "AGENTGATE_MANAGED_GUIDANCE_TASK_TYPE", "",
 ).strip()
+
+
+def managed_guidance_binding_for(repository_id, task_type):
+    """The binding for one work item, or ``None``.
+
+    Takes the *session's* repository and task, not the process's. A shared bot
+    handles sessions for several repositories, so a process-wide binding would
+    deliver one repository's instruction to all of them. Callers pass what the work
+    item actually is; a missing or different value yields ``None``.
+
+    V1 is a dedicated worker: the configured binding describes the one repository
+    and task this process serves, and any other work item is out of scope.
+    """
+    configured_repo = AGENTGATE_MANAGED_GUIDANCE_REPOSITORY or ""
+    configured_task = AGENTGATE_MANAGED_GUIDANCE_TASK_TYPE or ""
+    if not configured_repo or not configured_task:
+        return None
+    if not repository_id or not task_type:
+        return None
+    if (repository_id, task_type) != (configured_repo, configured_task):
+        return None
+    return (configured_repo, configured_task)
 
 
 def managed_guidance_selections():

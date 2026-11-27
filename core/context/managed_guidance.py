@@ -208,49 +208,63 @@ def is_guidance_key(key: str) -> bool:
 
 
 def strip_guidance_record_lines(parts: "list[str]") -> "list[str]":
-    """Remove every managed-guidance record line from recalled memory.
+    """Remove managed-guidance records from recalled memory, whole.
 
-    Generic recall renders each record as ``- <key>: <value>``. Records in the
-    guidance namespace are excluded here **unconditionally** — not only when a
-    selection matched — because the instruction must reach the model through
-    exactly one path: the configured selection. A withdrawn, ambiguous or
-    out-of-scope instruction must not arrive through recall in its place.
+    Generic recall renders each record as a bullet followed by its value, and a
+    value may span several lines::
 
-    Matching is on the record *key*, never the value: the instruction text is
-    ordinary prose that may legitimately appear in unrelated records.
+        - memory/note/komper: deploy checklist covers index usage
+        - memory/guidance/komper/bug-fix: Verify the upgrade path.
+          Then run the migration twice.
+
+    Dropping only the line bearing the key leaves the continuation lines behind —
+    the instruction is still partly delivered. This removes the **entire record**:
+    from the matching bullet until the next bullet begins.
+
+    The exclusion is unconditional and runs before any selection is resolved, so a
+    withdrawn, ambiguous or out-of-scope instruction cannot arrive through recall in
+    place of the configured path. Ordinary memories in the same block are preserved.
     """
     kept: list[str] = []
     for part in parts or []:
         if not isinstance(part, str):
             kept.append(part)
             continue
-        lines = part.splitlines()
-        survivors = [
-            line for line in lines
-            if not any(is_guidance_key(tok) for tok in _record_keys_in(line))
-        ]
-        if len(survivors) == len(lines):
-            kept.append(part)
-            continue
+
+        survivors: list[str] = []
+        skipping = False
+        for line in part.splitlines():
+            key = _record_key_of(line)
+            if key is not None:
+                # A new record begins here; decide about it and what follows.
+                skipping = is_guidance_key(key)
+                if skipping:
+                    continue
+            elif skipping:
+                # Continuation of a managed record: part of it, so drop it.
+                continue
+            survivors.append(line)
+
         remaining = "\n".join(survivors).strip()
         if remaining:
             kept.append(remaining)
     return kept
 
 
-def _record_keys_in(line: str) -> "list[str]":
-    """Keys a rendered recall line could be about.
+def _record_key_of(line: str) -> "Optional[str]":
+    """The record key a rendered recall line introduces, or ``None``.
 
-    A rendered line is ``- <key>: <value>``; the key is the text between the bullet
-    and the first colon. Anything that does not look like a rendered record yields
-    no key, so prose is never mistaken for one.
+    A rendered record begins with ``- <key>:``. Prose, bullets without a colon, and
+    continuation lines yield ``None``, so ordinary text is never mistaken for a
+    record boundary.
     """
-    stripped = line.strip()
+    stripped = line.lstrip()
     if not stripped.startswith("- "):
-        return []
-    body = stripped[2:]
-    head, sep, _ = body.partition(":")
+        return None
+    head, sep, _ = stripped[2:].partition(":")
     if not sep:
-        return []
+        return None
     head = head.strip()
-    return [head] if head else []
+    if not head or " " in head:
+        return None
+    return head

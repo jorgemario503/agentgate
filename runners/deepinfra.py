@@ -1073,13 +1073,19 @@ class DeepInfraRunner:
             if select_unique is None:
                 return ""
 
-            # The host states the binding explicitly. No inference: this slice has
-            # no taxonomy and does not guess a repository from whatever the session
-            # happened to mention. An unset binding leaves the scope unresolved,
-            # which yields no guidance.
+            # The binding belongs to the *work item*, not to the process. A shared
+            # bot handles sessions for several repositories, so a process-wide
+            # binding would send one repository's instruction to all of them.
+            # `managed_guidance_binding_for` compares the session's own work item
+            # against the configured one and returns None for anything else.
+            work_repo, work_task = self._work_item(thread_id, workspace_path, store_base)
+            binding = _c.managed_guidance_binding_for(work_repo, work_task)
+            if binding is None:
+                return ""
+
             scope = ResolvedScope(
-                repository_id=getattr(_c, "AGENTGATE_MANAGED_GUIDANCE_REPOSITORY", "") or None,
-                task_type=getattr(_c, "AGENTGATE_MANAGED_GUIDANCE_TASK_TYPE", "") or None,
+                repository_id=work_repo,
+                task_type=work_task,
                 agent_id=getattr(_c, "AGENTGATE_MANAGED_GUIDANCE_AGENT_ID", "agentgate"),
             )
             resolved = resolve_managed_guidance(
@@ -1095,6 +1101,38 @@ class DeepInfraRunner:
         except Exception:
             # Guidance is optional: never cost a turn.
             return ""
+
+    def _work_item(
+        self, thread_id: str, workspace_path: str, store_base: str,
+    ) -> tuple[str | None, str | None]:
+        """The (repository, task_type) this session is a work item *for*.
+
+        V1 is a dedicated worker: the process is configured to serve one repository
+        and one task, and a session is that work item when the repository it has
+        evidence for matches. The repository comes from the same evidence the repo
+        map uses — paths the session's own turns named — never the operator
+        registry and never the scratch workspace basename, which is ``workspace``
+        and names nothing.
+
+        A session working in a different repository returns that repository, so the
+        binding lookup declines it: a shared bot must not send komper's instruction
+        to a session working somewhere else. A session with no resolved repository
+        returns ``(None, ...)``, which declines too.
+        """
+        from core.context.repo_map import find_repo_root
+
+        try:
+            candidates = self._repo_candidates(thread_id, workspace_path, store_base) or []
+            root = find_repo_root(workspace_path, candidates=candidates)
+        except Exception:
+            return (None, None)
+
+        repository = getattr(root, "name", None) or None
+        # The task is the one this worker is configured for; a session in the right
+        # repository is that work item. There is no taxonomy in V1.
+        import core.config as _c
+        task = getattr(_c, "AGENTGATE_MANAGED_GUIDANCE_TASK_TYPE", "") or None
+        return (repository, task)
 
     def _paths_named_in_history(
         self, thread_id: str, store_base: str, limit: int = 40,

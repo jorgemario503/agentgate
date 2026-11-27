@@ -574,13 +574,18 @@ inferred:
 # The record a maintainer published, with repository_id and task_type set on it.
 AGENTGATE_MANAGED_GUIDANCE=komper:bug_fix:memory/guidance/komper/bug-fix
 
-# The scope this runner applies it under. Both must be set, or no guidance is sent.
+# The work item this worker serves. Both must be set, or no guidance is sent.
 AGENTGATE_MANAGED_GUIDANCE_REPOSITORY=komper
 AGENTGATE_MANAGED_GUIDANCE_TASK_TYPE=bug_fix
 
 # The identity AgentDB authorizes the read as (default: agentgate).
 AGENTGATE_MANAGED_GUIDANCE_AGENT_ID=agentgate
 ```
+
+**The binding is per work item, not per process.** V1 is a dedicated worker: it
+serves the one repository and task named above, and a session working in a different
+repository receives **no** guidance — even on a bot that handles several
+repositories. A session with no resolved repository receives none either.
 
 At most one instruction is delivered per turn, through the ephemeral context, and
 **never** through recalled memory: records under `memory/guidance/` are excluded from

@@ -503,16 +503,24 @@ async def _drive(runner, platform, thread_id, workspace, prompt):
     )
 
 
-def _run_once(runner, store, tmp_path, prompt, *, thread_id="t1"):
-    """Wire AgentDB into the runner and drive exactly one real turn."""
+def _run_once(runner, store, tmp_path, prompt, *, thread_id="t1", repo=REPO):
+    """Wire AgentDB into the runner and drive exactly one real turn.
+
+    The workspace is a real repository named after ``repo``, so the session has the
+    work-item evidence a real one would: a session in ``komper`` is that work item,
+    and a session in another repository is not.
+    """
     import asyncio
 
     platform = _platform(tmp_path, store)
     runner._agentdb = store
     runner.init_agentdb(store, platform)
-    workspace = tmp_path / "ws"
-    workspace.mkdir(exist_ok=True)
+    # Named exactly as the repository, since the resolved root's basename is what
+    # identifies the work item.
+    workspace = tmp_path / repo
+    (workspace / ".git").mkdir(parents=True, exist_ok=True)
     asyncio.run(_drive(runner, platform, thread_id, str(workspace), prompt))
+    return workspace
 
 
 def test_run_prompt_delivers_the_instruction_once(store, scripted, tmp_path, monkeypatch):
@@ -567,3 +575,106 @@ def test_run_prompt_keeps_guidance_out_of_recall_even_when_not_selected(
     runner = _runner_with_agentdb(scripted, store, monkeypatch, repo=REPO, task=None)
     _run_once(runner, store, tmp_path, "Verify upgrade database previous release")
     assert INSTRUCTION not in scripted.text_sent()
+
+
+# ---------------------------------------------------------------------------
+# Work-item binding: one bot, several repositories
+# ---------------------------------------------------------------------------
+
+def test_the_same_bot_does_not_send_guidance_to_another_repository(
+    store, scripted, tmp_path, monkeypatch,
+):
+    """Finding 1: the binding is per work item, not per process.
+
+    The process is configured for komper:bug_fix. A session working in another
+    repository on the same bot must receive nothing.
+    """
+    runner = _runner_with_agentdb(scripted, store, monkeypatch, repo=REPO, task=TASK)
+
+    # A session in a different repository.
+    _run_once(runner, store, tmp_path, "deploy checklist", thread_id="other", repo="another-repo")
+    assert INSTRUCTION not in scripted.text_sent(), (
+        "the configured repository's instruction reached a different repository"
+    )
+
+    # The same bot, the matching work item, still gets it once.
+    _run_once(runner, store, tmp_path, "deploy checklist", thread_id="komper")
+    assert scripted.text_sent().count(INSTRUCTION) == 1
+
+
+def test_a_session_with_no_resolved_repository_gets_nothing(
+    store, scripted, tmp_path, monkeypatch,
+):
+    """No work-item evidence and no configuration means no guidance."""
+    runner = _runner_with_agentdb(scripted, store, monkeypatch, repo=REPO, task=TASK)
+
+    import asyncio
+    platform = _platform(tmp_path, store)
+    runner._agentdb = store
+    runner.init_agentdb(store, platform)
+    bare = tmp_path / "scratch"
+    bare.mkdir(exist_ok=True)          # not a repository
+    asyncio.run(_drive(runner, platform, "t1", str(bare), "deploy checklist"))
+
+    assert INSTRUCTION not in scripted.text_sent()
+
+
+# ---------------------------------------------------------------------------
+# Whole-record exclusion: a multi-line instruction must not leak
+# ---------------------------------------------------------------------------
+
+MULTILINE = (
+    "Verify the upgrade from the previous release.\n"
+    "Then run the migration twice.\n"
+    "Finally compare the schemas."
+)
+
+
+def test_a_multiline_instruction_is_excluded_whole_from_recall(
+    store, scripted, tmp_path, monkeypatch,
+):
+    """Finding 2: continuation lines are part of the record, not loose text.
+
+    A line filter dropped only the bullet bearing the key, leaving the rest of the
+    value in the request. The whole record is excluded now, and an ordinary memory
+    in the same recall result still reaches the provider.
+    """
+    store.write(
+        key=GUIDANCE_KEY, value=MULTILINE, origin="human_approved",
+        agent_id="agentgate", session_id=None,
+        repository_id=REPO, task_type=TASK,
+    )
+    store.write(
+        key="memory/note/komper", value="deploy checklist covers index usage",
+        origin="agent_inferred", agent_id="agentgate", session_id="s-1",
+        repository_id=REPO, task_type=TASK,
+    )
+    runner = _runner_with_agentdb(scripted, store, monkeypatch, repo=REPO, task=None)
+    # One query that matches BOTH records, so the exclusion is exercised against a
+    # recall result that also carries an ordinary memory.
+    _run_once(runner, store, tmp_path, "deploy checklist verify upgrade migration")
+
+    sent = scripted.text_sent()
+    # No selected guidance (task unset), so the whole instruction must be absent.
+    assert "Then run the migration twice" not in sent, (
+        "a continuation line of the managed instruction leaked into the request"
+    )
+    assert "Finally compare the schemas" not in sent
+    assert "Verify the upgrade from the previous release" not in sent
+    # The ordinary memory in the same recall result still arrives.
+    assert "deploy checklist covers index usage" in sent
+
+
+def test_multiline_exclusion_keeps_following_records():
+    """A managed record's continuation must not swallow the next record."""
+    from core.context.managed_guidance import strip_guidance_record_lines
+
+    block = (
+        "- memory/guidance/komper/bug-fix: line one\n"
+        "  line two continues\n"
+        "- memory/note/komper: an ordinary memory"
+    )
+    kept = strip_guidance_record_lines([block])
+    assert len(kept) == 1
+    assert "an ordinary memory" in kept[0]
+    assert "line one" not in kept[0] and "line two" not in kept[0]
