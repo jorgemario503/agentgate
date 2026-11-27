@@ -140,6 +140,109 @@ AGENTDB_ENABLED = os.environ.get("AGENTDB_ENABLED", "true").lower() in ("true", 
 #   (requires: pip install 'agentdatabase[local-embed]')
 AGENTDB_MEMORY_DIR = os.environ.get("AGENTDB_MEMORY_DIR", "agentdb-workspace")
 AGENTDB_PERMISSIONS_PATH = os.environ.get("AGENTDB_PERMISSIONS_PATH", "permissions.yaml")
+# -------------------------
+# Managed repository guidance (opt-in, default off)
+# -------------------------
+# A maintainer maps an exact repository + task type to one AgentDB record key:
+#   AGENTGATE_MANAGED_GUIDANCE=komper:bug_fix:memory/guidance/komper/bug-fix
+# The instruction is read with AgentDB.select_unique() (0.9.0+), so AgentDB's read
+# policy applies and the key must resolve to exactly one live record; the record's
+# own scope must then match exactly. At most one instruction is sent per turn
+# through the ephemeral context. Empty means the feature is off, and an agentdb
+# without select_unique omits the feature rather than guessing.
+#
+# Restart required: the mapping is process environment, read at import, so editing
+# it takes effect when the bot restarts. Everything else — which record, its
+# content, its scope, whether it still exists — is resolved per request, so a
+# maintainer withdrawing or replacing the *record* takes effect on the next turn
+# without a restart.
+AGENTGATE_MANAGED_GUIDANCE = os.environ.get("AGENTGATE_MANAGED_GUIDANCE", "")
+AGENTGATE_MANAGED_GUIDANCE_AGENT_ID = os.environ.get(
+    "AGENTGATE_MANAGED_GUIDANCE_AGENT_ID", "agentgate",
+)
+# The scope is bound **per work item**, not per process.
+#
+# A single process-wide `repository:task` setting cannot serve a shared bot: if the
+# bot handles sessions for komper and for another repository, a process-wide binding
+# sends komper's instruction to both. The binding is therefore looked up per work
+# item, and a session with no matching binding receives no guidance.
+#
+# V1 is a dedicated worker: one repository and one task type, stated explicitly.
+# There is no taxonomy and no inference — an unset binding means the scope is
+# unresolved, which means no guidance, never "match any repository" or "infer it
+# from whatever the session mentioned".
+#
+#   AGENTGATE_MANAGED_GUIDANCE_REPOSITORY=komper
+#   AGENTGATE_MANAGED_GUIDANCE_TASK_TYPE=bug_fix
+#
+# `DEDICATED` is the only V1 mode: this worker serves that repository and task, and
+# refuses guidance for any other work item it is asked to handle.
+AGENTGATE_MANAGED_GUIDANCE_REPOSITORY = os.environ.get(
+    "AGENTGATE_MANAGED_GUIDANCE_REPOSITORY", "",
+).strip()
+AGENTGATE_MANAGED_GUIDANCE_TASK_TYPE = os.environ.get(
+    "AGENTGATE_MANAGED_GUIDANCE_TASK_TYPE", "",
+).strip()
+
+
+def managed_guidance_binding_for(repository_id, task_type):
+    """The binding for one work item, or ``None``.
+
+    Takes the *session's* repository and task, not the process's. A shared bot
+    handles sessions for several repositories, so a process-wide binding would
+    deliver one repository's instruction to all of them. Callers pass what the work
+    item actually is; a missing or different value yields ``None``.
+
+    V1 is a dedicated worker: the configured binding describes the one repository
+    and task this process serves, and any other work item is out of scope.
+    """
+    configured_repo = AGENTGATE_MANAGED_GUIDANCE_REPOSITORY or ""
+    configured_task = AGENTGATE_MANAGED_GUIDANCE_TASK_TYPE or ""
+    if not configured_repo or not configured_task:
+        return None
+    if not repository_id or not task_type:
+        return None
+    if (repository_id, task_type) != (configured_repo, configured_task):
+        return None
+    return (configured_repo, configured_task)
+
+
+def managed_guidance_selections():
+    """Parsed selections, and the entries that could not be parsed.
+
+    Returns ``(selections, problems)``. Reported at startup like ADDITIONAL_DIRS:
+    a typo in one mapping should be visible, not silently reduce guidance to
+    nothing.
+    """
+    from core.context.managed_guidance import parse_selections
+
+    raw = AGENTGATE_MANAGED_GUIDANCE or ""
+    selections = parse_selections(raw)
+    entries = [e.strip() for e in raw.split(",") if e.strip()]
+    problems = []
+    if len(selections) != len(entries):
+        for entry in entries:
+            parts = entry.split(":", 2)
+            if len(parts) != 3 or not all(p.strip() for p in parts):
+                problems.append(
+                    f"managed guidance {entry!r}: expected repository:task_type:record_key"
+                )
+    return selections, problems
+
+
+def managed_guidance_report():
+    """Startup lines describing the managed-guidance configuration."""
+    selections, problems = managed_guidance_selections()
+    lines = []
+    if selections:
+        lines.append(f"Managed guidance: {len(selections)} selection(s)")
+        for s in selections:
+            lines.append(
+                f"  {s.repository_id}:{s.task_type} -> {s.record_key}"
+            )
+    for problem in problems:
+        lines.append(problem)
+    return lines
 # Consolidation synthesis (llm_fn): OFF by default. When enabled AND a
 # consolidation model is configured ({PREFIX}_CONSOLIDATION_MODEL or a global
 # CONSOLIDATION_MODEL), AgentGate passes an llm_fn to end_session so consolidation

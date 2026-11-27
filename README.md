@@ -561,6 +561,53 @@ opt-in live model probes and how to run them safely, see
 > is the single source of truth — every context asset, which backend receives it, and
 > which session event triggers it. The sections below expand it.
 
+## Managed repository guidance (opt-in, OFF by default)
+
+A maintainer can publish **one short instruction** that reaches the agent only on a
+task it applies to — for example "when fixing a SQLite migration, verify an upgrade
+from a database created by the previous release".
+
+The instruction is an ordinary AgentDB record. **You** state the binding; nothing is
+inferred:
+
+```env
+# The record a maintainer published, with repository_id and task_type set on it.
+AGENTGATE_MANAGED_GUIDANCE=komper:bug_fix:memory/guidance/komper/bug-fix
+
+# The work item this worker serves. Both must be set, or no guidance is sent.
+AGENTGATE_MANAGED_GUIDANCE_REPOSITORY=komper
+AGENTGATE_MANAGED_GUIDANCE_TASK_TYPE=bug_fix
+
+# The identity AgentDB authorizes the read as (default: agentgate).
+AGENTGATE_MANAGED_GUIDANCE_AGENT_ID=agentgate
+```
+
+**The binding is per work item, not per process.** V1 is a dedicated worker: it
+serves the one repository and task named above, and a session working in a different
+repository receives **no** guidance — even on a bot that handles several
+repositories. A session with no resolved repository receives none either.
+
+At most one instruction is delivered per turn, through the ephemeral context, and
+**never** through recalled memory: records under `memory/guidance/` are excluded from
+generic recall unconditionally, so a withdrawn or out-of-scope instruction cannot
+arrive by that path instead.
+
+Guidance is omitted when the scope is unresolved, the record is missing or
+unreadable, the key resolves to more than one live record, the record's own scope no
+longer matches, or the maintainer withdraws it. A turn without guidance is normal.
+
+**Restart required for the binding.** These are process environment read at import.
+Everything else — the record's content, its scope, whether it still exists — is
+resolved every turn, so a maintainer withdrawing or replacing the *record* takes
+effect on the next turn without a restart.
+
+**Requires `agentdatabase>=0.9.0`** for `AgentDB.select_unique()`. On an older
+install the feature omits itself rather than falling back to `read()`, which returns
+an arbitrary sibling when a repeat write has left several records under one key.
+
+Give each published instruction an unambiguous key: a repeated `write()` leaves
+sibling records under the same key, which reads as ambiguous and sends nothing.
+
 ## Repo map and `ADDITIONAL_DIRS`
 
 ### What the repo map is
