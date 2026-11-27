@@ -421,26 +421,26 @@ def test_recalled_memory_is_stripped_of_the_managed_record(store):
     model* by that second path. The runner strips it from recalled memory before
     assembling the turn.
     """
-    from core.context.managed_guidance import strip_guidance_lines
+    from core.context.managed_guidance import strip_guidance_record_lines
 
     hits = store.retrieve("Verify upgrade database previous release",
                           agent_id="agentgate", limit=20)
     recalled = [r for r in hits.records if r.key == GUIDANCE_KEY]
     assert recalled, "expected generic recall to surface the managed record"
 
-    # Recall renders records as "- key: value"; the runner removes those lines.
+    # Recall renders records as "- key: value"; the namespace is dropped wholesale.
     rendered = f"- {GUIDANCE_KEY}: {INSTRUCTION}"
-    assert strip_guidance_lines([rendered], GUIDANCE_KEY) == []
+    assert strip_guidance_record_lines([rendered]) == []
 
 
 def test_stripping_keeps_other_recalled_records(store):
-    from core.context.managed_guidance import strip_guidance_lines
+    from core.context.managed_guidance import strip_guidance_record_lines
 
     block = (
         "- memory/note/komper: the deploy checklist covers index usage\n"
         f"- {GUIDANCE_KEY}: {INSTRUCTION}"
     )
-    kept = strip_guidance_lines([block], GUIDANCE_KEY)
+    kept = strip_guidance_record_lines([block])
     assert len(kept) == 1
     assert "deploy checklist" in kept[0]
     assert GUIDANCE_KEY not in kept[0]
@@ -460,3 +460,110 @@ def test_an_older_agentdb_omits_guidance_rather_than_guessing(monkeypatch):
         lambda: (parse_selections(f"{REPO}:{TASK}:{GUIDANCE_KEY}"), []),
     )
     assert runner._managed_guidance_text("t1", "/ws", "/tmp") == ""
+
+
+# ---------------------------------------------------------------------------
+# Through run_prompt(): the real entry point, generic recall enabled
+# ---------------------------------------------------------------------------
+
+def _platform(tmp_path, store):
+    """A PlatformConfig whose session store lives under tmp_path."""
+    from core.sessions import SessionStore
+    from runners.base import PlatformConfig
+
+    base = tmp_path / "sessions"
+    base.mkdir(parents=True, exist_ok=True)
+    return PlatformConfig(session_store=SessionStore(base=str(base)), agent_id="agentgate")
+
+
+def _runner_with_agentdb(scripted, store, monkeypatch, *, repo, task):
+    """A DeepInfraRunner wired to a real AgentDB, as the bots wire it."""
+    import core.config as config
+    import runners.deepinfra as di
+
+    monkeypatch.setattr(config, "AGENTGATE_MANAGED_GUIDANCE",
+                        f"{repo}:{task}:{GUIDANCE_KEY}")
+    monkeypatch.setattr(config, "AGENTGATE_MANAGED_GUIDANCE_REPOSITORY", repo)
+    monkeypatch.setattr(config, "AGENTGATE_MANAGED_GUIDANCE_TASK_TYPE", task)
+    monkeypatch.setattr(config, "AGENTGATE_MANAGED_GUIDANCE_AGENT_ID", "agentgate")
+    # Generic memory recall must be on, so the exclusion is actually exercised.
+    monkeypatch.setattr(config, "AGENTDB_ENABLED", True)
+
+    runner = di.DeepInfraRunner(model="test-model")
+    return runner
+
+
+async def _drive(runner, platform, thread_id, workspace, prompt):
+    async def post_fn(text):
+        return None
+
+    return await runner.run_prompt(
+        thread_id=thread_id, workspace_path=workspace, prompt=prompt,
+        resume_session_id=None, post_fn=post_fn, platform=platform,
+    )
+
+
+def _run_once(runner, store, tmp_path, prompt, *, thread_id="t1"):
+    """Wire AgentDB into the runner and drive exactly one real turn."""
+    import asyncio
+
+    platform = _platform(tmp_path, store)
+    runner._agentdb = store
+    runner.init_agentdb(store, platform)
+    workspace = tmp_path / "ws"
+    workspace.mkdir(exist_ok=True)
+    asyncio.run(_drive(runner, platform, thread_id, str(workspace), prompt))
+
+
+def test_run_prompt_delivers_the_instruction_once(store, scripted, tmp_path, monkeypatch):
+    """Matching binding, authorized caller, generic recall on: one instruction."""
+    store.write(
+        key="memory/note/komper", value="the deploy checklist covers index usage",
+        origin="agent_inferred", agent_id="agentgate", session_id="s-1",
+        repository_id=REPO, task_type=TASK,
+    )
+    runner = _runner_with_agentdb(scripted, store, monkeypatch, repo=REPO, task=TASK)
+    _run_once(runner, store, tmp_path, "deploy checklist")
+
+    sent = scripted.text_sent()
+    assert sent.count(INSTRUCTION) == 1, (
+        f"expected the instruction exactly once, found {sent.count(INSTRUCTION)}"
+    )
+
+
+@pytest.mark.parametrize("repo,task,label", [
+    (REPO, None, "unresolved task scope"),
+    (None, TASK, "unresolved repository"),
+    ("another-repo", TASK, "scope mismatch"),
+])
+def test_run_prompt_sends_nothing_without_a_matching_binding(
+    store, scripted, tmp_path, monkeypatch, repo, task, label,
+):
+    """Unresolved scope and scope mismatch both yield zero."""
+    runner = _runner_with_agentdb(scripted, store, monkeypatch, repo=repo, task=task)
+    _run_once(runner, store, tmp_path, "deploy checklist")
+    assert INSTRUCTION not in scripted.text_sent(), label
+
+
+def test_run_prompt_sends_nothing_after_withdrawal(store, scripted, tmp_path, monkeypatch):
+    """Withdrawal (the record gone) yields zero on the next real turn."""
+    runner = _runner_with_agentdb(scripted, store, monkeypatch, repo=REPO, task=TASK)
+    _run_once(runner, store, tmp_path, "deploy checklist")
+    assert INSTRUCTION in scripted.text_sent()
+
+    store.delete(GUIDANCE_KEY, agent_id="agentgate", trust_zone="human_approved")
+    _run_once(runner, store, tmp_path, "deploy checklist")
+    assert INSTRUCTION not in scripted.text_sent(), "guidance survived withdrawal"
+
+
+def test_run_prompt_keeps_guidance_out_of_recall_even_when_not_selected(
+    store, scripted, tmp_path, monkeypatch,
+):
+    """The namespace is excluded from recall regardless of the binding.
+
+    With the binding unresolved, no instruction is selected — but the record must
+    still not arrive through generic recall.
+    """
+    runner = _runner_with_agentdb(scripted, store, monkeypatch, repo=REPO, task=None)
+    _run_once(runner, store, tmp_path, "Verify upgrade database previous release")
+    assert INSTRUCTION not in scripted.text_sent()

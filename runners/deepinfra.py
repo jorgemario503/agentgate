@@ -61,16 +61,6 @@ def _cfg_tool_compression_enabled() -> bool:
     return bool(_c.TOOL_COMPRESSION_ENABLED)
 
 
-def _cached_managed_selections():
-    """Configured managed-guidance selections (parsed from process config)."""
-    import core.config as _c
-    try:
-        selections, _problems = _c.managed_guidance_selections()
-        return selections
-    except Exception:
-        return ()
-
-
 def _skills_context():
     """Build the shared skills context from config (OFF by default).
 
@@ -1083,12 +1073,13 @@ class DeepInfraRunner:
             if select_unique is None:
                 return ""
 
-            repository_id = self._resolved_repository_id(
-                thread_id, workspace_path, store_base,
-            )
+            # The host states the binding explicitly. No inference: this slice has
+            # no taxonomy and does not guess a repository from whatever the session
+            # happened to mention. An unset binding leaves the scope unresolved,
+            # which yields no guidance.
             scope = ResolvedScope(
-                repository_id=repository_id,
-                task_type=self._resolved_task_type(thread_id, workspace_path, store_base),
+                repository_id=getattr(_c, "AGENTGATE_MANAGED_GUIDANCE_REPOSITORY", "") or None,
+                task_type=getattr(_c, "AGENTGATE_MANAGED_GUIDANCE_TASK_TYPE", "") or None,
                 agent_id=getattr(_c, "AGENTGATE_MANAGED_GUIDANCE_AGENT_ID", "agentgate"),
             )
             resolved = resolve_managed_guidance(
@@ -1104,35 +1095,6 @@ class DeepInfraRunner:
         except Exception:
             # Guidance is optional: never cost a turn.
             return ""
-
-    def _resolved_repository_id(
-        self, thread_id: str, workspace_path: str, store_base: str,
-    ) -> str | None:
-        """The repository this session is working in, or ``None``.
-
-        Uses the same evidence as the repo map — paths the session's own turns
-        named, never the operator registry and never the scratch workspace
-        basename, which is ``workspace`` and would name nothing useful.
-        """
-        from core.context.repo_map import find_repo_root
-
-        candidates = self._repo_candidates(thread_id, workspace_path, store_base) or []
-        root = find_repo_root(workspace_path, candidates=candidates)
-        if root is None:
-            return None
-        return getattr(root, "name", None) or None
-
-    def _resolved_task_type(
-        self, thread_id: str, workspace_path: str, store_base: str,
-    ) -> str | None:
-        """The task type for this turn.
-
-        AgentGate does not yet own a taxonomy (DEC-507), so V1 takes an explicit
-        operator mapping from work-item evidence and otherwise reports unresolved.
-        Reporting ``None`` is deliberate: an unknown task type means no guidance,
-        never guidance written for a different kind of task.
-        """
-        return None
 
     def _paths_named_in_history(
         self, thread_id: str, store_base: str, limit: int = 40,
@@ -1218,20 +1180,19 @@ class DeepInfraRunner:
                         m["content"] for m in _messages
                         if m.get("role") in ("system", "user") and m["content"] != prompt
                     ]
-                # Resolved before injection assembly so recalled memory can be
-                # cleared of the managed record: the instruction must arrive
-                # through exactly one path.
+                    # Managed guidance reaches the model through exactly one path:
+                    # its configured selection. Records in that namespace are
+                    # dropped from recalled memory unconditionally — before the
+                    # selection is even resolved — so a withdrawn, ambiguous or
+                    # out-of-scope instruction cannot arrive through recall in its
+                    # place. Gating this on the selection would reintroduce exactly
+                    # that path.
+                    from core.context.managed_guidance import strip_guidance_record_lines
+                    _memory_parts = strip_guidance_record_lines(_memory_parts)
+
                 _managed_text = self._managed_guidance_text(
                     thread_id, workspace_path, platform.session_store.base,
                 )
-                if _managed_text and _memory_parts:
-                    from core.context.managed_guidance import strip_guidance_lines
-                    _managed_keys = [
-                        s.record_key
-                        for s in _cached_managed_selections()
-                    ]
-                    for _key in _managed_keys:
-                        _memory_parts = strip_guidance_lines(_memory_parts, _key)
 
                 _injections = build_turn_injections(
                     _state,

@@ -160,6 +160,19 @@ AGENTGATE_MANAGED_GUIDANCE = os.environ.get("AGENTGATE_MANAGED_GUIDANCE", "")
 AGENTGATE_MANAGED_GUIDANCE_AGENT_ID = os.environ.get(
     "AGENTGATE_MANAGED_GUIDANCE_AGENT_ID", "agentgate",
 )
+# The host states the scope explicitly. This slice has no taxonomy and no
+# repository inference: an operator who wants guidance binds one repository and one
+# task type to this runner, e.g.
+#   AGENTGATE_MANAGED_GUIDANCE_REPOSITORY=komper
+#   AGENTGATE_MANAGED_GUIDANCE_TASK_TYPE=bug_fix
+# Unset means the scope is unresolved, and unresolved means no guidance — never
+# "match any repository" or "infer it from whatever the session mentioned".
+AGENTGATE_MANAGED_GUIDANCE_REPOSITORY = os.environ.get(
+    "AGENTGATE_MANAGED_GUIDANCE_REPOSITORY", "",
+).strip()
+AGENTGATE_MANAGED_GUIDANCE_TASK_TYPE = os.environ.get(
+    "AGENTGATE_MANAGED_GUIDANCE_TASK_TYPE", "",
+).strip()
 
 
 def managed_guidance_selections():
@@ -176,7 +189,6 @@ def managed_guidance_selections():
     entries = [e.strip() for e in raw.split(",") if e.strip()]
     problems = []
     if len(selections) != len(entries):
-        parsed_keys = {(s.repository_id, s.task_type, s.record_key) for s in selections}
         for entry in entries:
             parts = entry.split(":", 2)
             if len(parts) != 3 or not all(p.strip() for p in parts):

@@ -37,6 +37,15 @@ from typing import Any, Optional
 #: the model treats it as a task instruction rather than reference material.
 MANAGED_GUIDANCE_HEADING = "## Repository guidance for this task"
 
+#: Key namespace reserved for maintainer-managed instructions.
+#:
+#: Records here reach the model through exactly one path — the configured
+#: selection — so generic recall must never render them. The exclusion is by
+#: namespace and is unconditional: gating it on "a selection matched" would let a
+#: withdrawn or out-of-scope instruction arrive through recall instead, which is
+#: the same instruction delivered by a path nobody configured.
+GUIDANCE_KEY_PREFIX = "memory/guidance/"
+
 
 @dataclass(frozen=True)
 class ManagedGuidanceSelection:
@@ -193,30 +202,55 @@ def parse_selections(raw: str) -> tuple[ManagedGuidanceSelection, ...]:
     return tuple(selections)
 
 
-def strip_guidance_lines(
-    parts: "list[str]", record_key: str,
-) -> "list[str]":
-    """Remove a managed record's line from recalled memory.
+def is_guidance_key(key: str) -> bool:
+    """True for a key in the managed-guidance namespace."""
+    return isinstance(key, str) and key.startswith(GUIDANCE_KEY_PREFIX)
 
-    Generic recall renders each record as ``- <key>: <value>``. A managed
-    instruction must reach the model through exactly one path — the configured
-    selection — so any occurrence of it in recalled memory is removed here. Without
-    this the same instruction can arrive twice, or arrive through recall on a turn
-    where its scope does not apply.
 
-    Matching is on the record key, not the value: the value is the instruction text,
-    which may legitimately appear in other records.
+def strip_guidance_record_lines(parts: "list[str]") -> "list[str]":
+    """Remove every managed-guidance record line from recalled memory.
+
+    Generic recall renders each record as ``- <key>: <value>``. Records in the
+    guidance namespace are excluded here **unconditionally** — not only when a
+    selection matched — because the instruction must reach the model through
+    exactly one path: the configured selection. A withdrawn, ambiguous or
+    out-of-scope instruction must not arrive through recall in its place.
+
+    Matching is on the record *key*, never the value: the instruction text is
+    ordinary prose that may legitimately appear in unrelated records.
     """
-    if not record_key:
-        return parts
-    marker = f"- {record_key}:"
     kept: list[str] = []
-    for part in parts:
-        if not isinstance(part, str) or marker not in part:
+    for part in parts or []:
+        if not isinstance(part, str):
             kept.append(part)
             continue
-        lines = [ln for ln in part.splitlines() if marker not in ln]
-        remaining = "\n".join(lines).strip()
+        lines = part.splitlines()
+        survivors = [
+            line for line in lines
+            if not any(is_guidance_key(tok) for tok in _record_keys_in(line))
+        ]
+        if len(survivors) == len(lines):
+            kept.append(part)
+            continue
+        remaining = "\n".join(survivors).strip()
         if remaining:
             kept.append(remaining)
     return kept
+
+
+def _record_keys_in(line: str) -> "list[str]":
+    """Keys a rendered recall line could be about.
+
+    A rendered line is ``- <key>: <value>``; the key is the text between the bullet
+    and the first colon. Anything that does not look like a rendered record yields
+    no key, so prose is never mistaken for one.
+    """
+    stripped = line.strip()
+    if not stripped.startswith("- "):
+        return []
+    body = stripped[2:]
+    head, sep, _ = body.partition(":")
+    if not sep:
+        return []
+    head = head.strip()
+    return [head] if head else []
