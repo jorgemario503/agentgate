@@ -61,6 +61,16 @@ def _cfg_tool_compression_enabled() -> bool:
     return bool(_c.TOOL_COMPRESSION_ENABLED)
 
 
+def _cached_managed_selections():
+    """Configured managed-guidance selections (parsed from process config)."""
+    import core.config as _c
+    try:
+        selections, _problems = _c.managed_guidance_selections()
+        return selections
+    except Exception:
+        return ()
+
+
 def _skills_context():
     """Build the shared skills context from config (OFF by default).
 
@@ -1065,6 +1075,14 @@ class DeepInfraRunner:
             if not selections or self._agentdb is None:
                 return ""
 
+            # Managed guidance needs an agentdb that can answer "is this key
+            # exactly one readable record?" (select_unique, 0.9.0+). An older
+            # install omits the feature rather than guessing with read(), which
+            # returns an arbitrary sibling when a repeat write left several.
+            select_unique = getattr(self._agentdb, "select_unique", None)
+            if select_unique is None:
+                return ""
+
             repository_id = self._resolved_repository_id(
                 thread_id, workspace_path, store_base,
             )
@@ -1076,11 +1094,11 @@ class DeepInfraRunner:
             resolved = resolve_managed_guidance(
                 selections=selections,
                 scope=scope,
-                read_record=self._agentdb.read,
-                # A repeat write leaves live siblings under one key and read()
-                # returns an arbitrary one; the selection is only meaningful if
-                # the key resolves to exactly one record.
-                count_live_by_key=getattr(self._agentdb, "count_live_by_key", None),
+                # A repeat write leaves live siblings under one key, and read()
+                # returns an arbitrary one. The configured key is only meaningful
+                # if it resolves to exactly one readable record, so the lookup
+                # resolves uniqueness and the record together (agentdb>=0.9.0).
+                select_unique=select_unique,
             )
             return resolved.text if resolved is not None else ""
         except Exception:
@@ -1200,6 +1218,21 @@ class DeepInfraRunner:
                         m["content"] for m in _messages
                         if m.get("role") in ("system", "user") and m["content"] != prompt
                     ]
+                # Resolved before injection assembly so recalled memory can be
+                # cleared of the managed record: the instruction must arrive
+                # through exactly one path.
+                _managed_text = self._managed_guidance_text(
+                    thread_id, workspace_path, platform.session_store.base,
+                )
+                if _managed_text and _memory_parts:
+                    from core.context.managed_guidance import strip_guidance_lines
+                    _managed_keys = [
+                        s.record_key
+                        for s in _cached_managed_selections()
+                    ]
+                    for _key in _managed_keys:
+                        _memory_parts = strip_guidance_lines(_memory_parts, _key)
+
                 _injections = build_turn_injections(
                     _state,
                     workspace_path=workspace_path,
@@ -1216,9 +1249,7 @@ class DeepInfraRunner:
                     # Resolved on every request, not at the session boundary: a
                     # withdrawal or scope switch must take effect on the next
                     # turn, and a resume must not replay a stale instruction.
-                    managed_guidance_text=self._managed_guidance_text(
-                        thread_id, workspace_path, platform.session_store.base,
-                    ),
+                    managed_guidance_text=_managed_text,
                     nudge=client.skills_recommendation(prompt),
                 )
                 await client.query(

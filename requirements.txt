@@ -27,7 +27,7 @@ openai>=1.0.0,<3.0.0
 # 0.7.0 adds: default_agent_scope (permissions), build_llm_fn (consolidation
 # synthesis), profile.consolidation, capture.track_directories, working_dirs on
 # checkpoint/summary/finalize, and the auto-consolidation agent_id fix.
-agentdatabase>=0.8.0
+agentdatabase>=0.9.0
 
 # Fireworks runner uses the openai package above — no vendor SDK required.
 

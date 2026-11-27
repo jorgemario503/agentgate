@@ -132,14 +132,15 @@ def resolve_managed_guidance(
     *,
     selections: tuple[ManagedGuidanceSelection, ...],
     scope: ResolvedScope,
-    read_record: Any,
-    count_live_by_key: Any = None,
+    select_unique: Any,
 ) -> Optional[ManagedGuidance]:
     """Resolve at most one instruction for this turn, or ``None``.
 
-    ``read_record(key, agent_id=...)`` is expected to be ``AgentDB.read`` — it
-    raises when the caller may not read the record, which is treated as "no
-    guidance" rather than an error the turn must survive.
+    ``select_unique(key, agent_id=...)`` is expected to be ``AgentDB.select_unique``
+    — the sole live, readable record for the key, or ``None``. Passing a lookup that
+    resolves uniqueness and the record together is what makes "the maintainer's
+    record" well defined: a plain ``read()`` returns an arbitrary sibling when a
+    repeat write has left several.
 
     Every failure mode in the spec lands on the same result, deliberately:
     unresolved scope, no mapping, an ambiguous mapping, a missing record, a scope
@@ -151,21 +152,13 @@ def resolve_managed_guidance(
         return None
 
     try:
-        record = read_record(selection.record_key, agent_id=scope.agent_id)
+        # One authorized, committed lookup: the sole live record for the key that
+        # this caller may read. ``None`` covers absent, ambiguous and denied, which
+        # are the same answer to "is there exactly one record I may use here?".
+        record = select_unique(selection.record_key, agent_id=scope.agent_id)
     except Exception:
-        # Denied read, or any other read failure: no guidance, no turn failure.
+        # A missing or older API, or any read failure: no guidance, no turn failure.
         return None
-
-    # A repeat write leaves sibling records under one key, and ``read()`` returns
-    # whichever it encounters first. If more than one live record shares the key,
-    # the selection is ambiguous: the maintainer's intent cannot be established, so
-    # nothing is sent rather than an arbitrary one of them.
-    if count_live_by_key is not None:
-        try:
-            if count_live_by_key(selection.record_key, agent_id=scope.agent_id) != 1:
-                return None
-        except Exception:
-            return None
 
     if not record_applies(record, scope):
         return None
@@ -181,9 +174,9 @@ def parse_selections(raw: str) -> tuple[ManagedGuidanceSelection, ...]:
 
     Example: ``komper:bug_fix:memory/guidance/komper/bug-fix``
 
-    A malformed entry is skipped with its reason rather than aborting startup —
-    guidance is optional, and a typo in one mapping should not stop the bot. The
-    caller reports the skipped entries, the way ``ADDITIONAL_DIRS`` does.
+    A malformed entry is skipped rather than aborting startup — guidance is
+    optional, and a typo in one mapping should not stop the bot. The caller
+    reports the skipped entries, the way ``ADDITIONAL_DIRS`` does.
     """
     selections: list[ManagedGuidanceSelection] = []
     for chunk in (raw or "").split(","):
@@ -198,3 +191,32 @@ def parse_selections(raw: str) -> tuple[ManagedGuidanceSelection, ...]:
             repository_id=repository_id, task_type=task_type, record_key=record_key,
         ))
     return tuple(selections)
+
+
+def strip_guidance_lines(
+    parts: "list[str]", record_key: str,
+) -> "list[str]":
+    """Remove a managed record's line from recalled memory.
+
+    Generic recall renders each record as ``- <key>: <value>``. A managed
+    instruction must reach the model through exactly one path — the configured
+    selection — so any occurrence of it in recalled memory is removed here. Without
+    this the same instruction can arrive twice, or arrive through recall on a turn
+    where its scope does not apply.
+
+    Matching is on the record key, not the value: the value is the instruction text,
+    which may legitimately appear in other records.
+    """
+    if not record_key:
+        return parts
+    marker = f"- {record_key}:"
+    kept: list[str] = []
+    for part in parts:
+        if not isinstance(part, str) or marker not in part:
+            kept.append(part)
+            continue
+        lines = [ln for ln in part.splitlines() if marker not in ln]
+        remaining = "\n".join(lines).strip()
+        if remaining:
+            kept.append(remaining)
+    return kept

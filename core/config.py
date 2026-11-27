@@ -145,10 +145,17 @@ AGENTDB_PERMISSIONS_PATH = os.environ.get("AGENTDB_PERMISSIONS_PATH", "permissio
 # -------------------------
 # A maintainer maps an exact repository + task type to one AgentDB record key:
 #   AGENTGATE_MANAGED_GUIDANCE=komper:bug_fix:memory/guidance/komper/bug-fix
-# The instruction is read with AgentDB.read() (so its read policy applies), the
-# record's own scope must match exactly, and at most one instruction is sent per
-# turn through the ephemeral context. Removing an entry withdraws the guidance on
-# the next request. Empty means the feature is off.
+# The instruction is read with AgentDB.select_unique() (0.9.0+), so AgentDB's read
+# policy applies and the key must resolve to exactly one live record; the record's
+# own scope must then match exactly. At most one instruction is sent per turn
+# through the ephemeral context. Empty means the feature is off, and an agentdb
+# without select_unique omits the feature rather than guessing.
+#
+# Restart required: the mapping is process environment, read at import, so editing
+# it takes effect when the bot restarts. Everything else — which record, its
+# content, its scope, whether it still exists — is resolved per request, so a
+# maintainer withdrawing or replacing the *record* takes effect on the next turn
+# without a restart.
 AGENTGATE_MANAGED_GUIDANCE = os.environ.get("AGENTGATE_MANAGED_GUIDANCE", "")
 AGENTGATE_MANAGED_GUIDANCE_AGENT_ID = os.environ.get(
     "AGENTGATE_MANAGED_GUIDANCE_AGENT_ID", "agentgate",

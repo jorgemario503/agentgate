@@ -25,9 +25,7 @@ from core.context.managed_guidance import (
 REPO = "komper"
 
 
-def _live_count(store):
-    """AgentDB's public ambiguity check."""
-    return store.count_live_by_key
+
 TASK = "bug_fix"
 GUIDANCE_KEY = "memory/guidance/komper/bug-fix"
 INSTRUCTION = "Verify an upgrade from a database created by the previous release."
@@ -114,6 +112,8 @@ def scripted(monkeypatch):
 
 def _client(scripted, *, context_window=None):
     """A real DeepInfraAgentClient with the scripted provider underneath."""
+    import tempfile
+
     import runners.deepinfra as di
 
     return di.DeepInfraAgentClient(
@@ -122,7 +122,7 @@ def _client(scripted, *, context_window=None):
         tools={},
         system_prompt="SYSTEM",
         session_id="t1",
-        session_store=di.JsonFileSessionStore(directory="./_test_sessions"),
+        session_store=di.JsonFileSessionStore(directory=tempfile.mkdtemp()),
         context_window=context_window,
         max_tool_iterations=1,
     )
@@ -147,8 +147,7 @@ def test_matching_scope_yields_one_instruction(store):
     resolved = resolve_managed_guidance(
         selections=selections,
         scope=ResolvedScope(REPO, TASK, "agentgate"),
-        read_record=store.read,
-        count_live_by_key=_live_count(store),
+        select_unique=store.select_unique,
     )
     assert resolved is not None
     assert resolved.text == INSTRUCTION
@@ -163,8 +162,7 @@ def test_wrong_scope_yields_nothing(store, repo, task):
     assert resolve_managed_guidance(
         selections=selections,
         scope=ResolvedScope(repo, task, "agentgate"),
-        read_record=store.read,
-        count_live_by_key=_live_count(store),
+        select_unique=store.select_unique,
     ) is None
 
 
@@ -176,8 +174,7 @@ def test_wrong_scope_yields_nothing(store, repo, task):
 def test_unresolved_scope_yields_nothing(store, scope):
     selections = parse_selections(f"{REPO}:{TASK}:{GUIDANCE_KEY}")
     assert resolve_managed_guidance(
-        selections=selections, scope=scope, read_record=store.read,
-        count_live_by_key=_live_count(store),
+        selections=selections, scope=scope, select_unique=store.select_unique,
     ) is None
 
 
@@ -187,8 +184,7 @@ def test_denied_read_yields_nothing(store):
     assert resolve_managed_guidance(
         selections=selections,
         scope=ResolvedScope(REPO, TASK, "stranger"),
-        read_record=store.read,
-        count_live_by_key=_live_count(store),
+        select_unique=store.select_unique,
     ) is None
 
 
@@ -197,8 +193,7 @@ def test_withdrawn_mapping_yields_nothing(store):
     assert resolve_managed_guidance(
         selections=(),
         scope=ResolvedScope(REPO, TASK, "agentgate"),
-        read_record=store.read,
-        count_live_by_key=_live_count(store),
+        select_unique=store.select_unique,
     ) is None
 
 
@@ -212,8 +207,7 @@ def test_a_rescoped_record_yields_nothing(store, tmp_path):
     assert resolve_managed_guidance(
         selections=selections,
         scope=ResolvedScope(REPO, TASK, "agentgate"),
-        read_record=store.read,
-        count_live_by_key=_live_count(store),
+        select_unique=store.select_unique,
     ) is None
 
 
@@ -225,8 +219,7 @@ def test_ambiguous_mapping_yields_nothing(store):
     assert resolve_managed_guidance(
         selections=selections,
         scope=ResolvedScope(REPO, TASK, "agentgate"),
-        read_record=store.read,
-        count_live_by_key=_live_count(store),
+        select_unique=store.select_unique,
     ) is None
 
 
@@ -240,8 +233,7 @@ def test_the_instruction_reaches_the_outgoing_request(store, scripted):
     resolved = resolve_managed_guidance(
         selections=selections,
         scope=ResolvedScope(REPO, TASK, "agentgate"),
-        read_record=store.read,
-        count_live_by_key=_live_count(store),
+        select_unique=store.select_unique,
     )
 
     client = _client(scripted)
@@ -257,8 +249,7 @@ def test_no_guidance_when_scope_does_not_match(store, scripted):
     resolved = resolve_managed_guidance(
         selections=parse_selections(f"{REPO}:{TASK}:{GUIDANCE_KEY}"),
         scope=ResolvedScope("other-repo", TASK, "agentgate"),
-        read_record=store.read,
-        count_live_by_key=_live_count(store),
+        select_unique=store.select_unique,
     )
     client = _client(scripted)
     _send(client, "fix the migration", ephemeral=resolved.text if resolved else None)
@@ -275,8 +266,7 @@ def test_a_resume_does_not_replay_stale_guidance(store, scripted):
     resolved = resolve_managed_guidance(
         selections=selections,
         scope=ResolvedScope(REPO, TASK, "agentgate"),
-        read_record=store.read,
-        count_live_by_key=_live_count(store),
+        select_unique=store.select_unique,
     )
     assert resolved is None
     _send(client, "resumed task", ephemeral=None)
@@ -290,8 +280,7 @@ def test_the_instruction_is_absent_from_saved_history(store, scripted, tmp_path)
     resolved = resolve_managed_guidance(
         selections=parse_selections(f"{REPO}:{TASK}:{GUIDANCE_KEY}"),
         scope=ResolvedScope(REPO, TASK, "agentgate"),
-        read_record=store.read,
-        count_live_by_key=_live_count(store),
+        select_unique=store.select_unique,
     )
     history = tmp_path / "history"
     import runners.deepinfra as di
@@ -317,8 +306,7 @@ def test_a_scope_switch_omits_the_old_instruction(store, scripted):
     first = resolve_managed_guidance(
         selections=parse_selections(f"{REPO}:{TASK}:{GUIDANCE_KEY}"),
         scope=ResolvedScope(REPO, TASK, "agentgate"),
-        read_record=store.read,
-        count_live_by_key=_live_count(store),
+        select_unique=store.select_unique,
     )
     assert first is not None
 
@@ -326,8 +314,7 @@ def test_a_scope_switch_omits_the_old_instruction(store, scripted):
     switched = resolve_managed_guidance(
         selections=parse_selections(f"{REPO}:{TASK}:{GUIDANCE_KEY}"),
         scope=ResolvedScope("another-repo", TASK, "agentgate"),
-        read_record=store.read,
-        count_live_by_key=_live_count(store),
+        select_unique=store.select_unique,
     )
     assert switched is None
 
@@ -360,13 +347,13 @@ def test_two_live_siblings_make_the_selection_ambiguous(store):
         repository_id="other-repo", task_type=TASK,
     )
     # In isolation mode the count is authorized, so pass the identity.
-    assert store.count_live_by_key(GUIDANCE_KEY, agent_id="agentgate") == 2
+    # Two live siblings: select_unique declines to choose.
+    assert store.select_unique(GUIDANCE_KEY, agent_id="agentgate") is None
 
     resolved = resolve_managed_guidance(
         selections=parse_selections(f"{REPO}:{TASK}:{GUIDANCE_KEY}"),
         scope=ResolvedScope(REPO, TASK, "agentgate"),
-        read_record=store.read,
-        count_live_by_key=store.count_live_by_key,
+        select_unique=store.select_unique,
     )
     assert resolved is None, "an ambiguous selection delivered guidance"
 
@@ -384,14 +371,92 @@ def test_archiving_the_sibling_restores_the_selection(store):
     scope = ResolvedScope(REPO, TASK, "agentgate")
     assert resolve_managed_guidance(
         selections=parse_selections(f"{REPO}:{TASK}:{GUIDANCE_KEY}"),
-        scope=scope, read_record=store.read,
-        count_live_by_key=store.count_live_by_key,
+        scope=scope, select_unique=store.select_unique,
     ) is None
 
     store._store.archive_record(sibling.id)
     resolved = resolve_managed_guidance(
         selections=parse_selections(f"{REPO}:{TASK}:{GUIDANCE_KEY}"),
-        scope=scope, read_record=store.read,
-        count_live_by_key=store.count_live_by_key,
+        scope=scope, select_unique=store.select_unique,
     )
     assert resolved is not None and resolved.text == INSTRUCTION
+
+
+# ---------------------------------------------------------------------------
+# Against the released API, with generic memory also enabled
+# ---------------------------------------------------------------------------
+
+def test_guidance_coexists_with_generic_memory_recall(store, scripted):
+    """The managed asset must not arrive through generic recall as well.
+
+    Generic memory is enabled on the same turn: an ordinary record that matches
+    the query is injected through the memory path, and the managed instruction
+    arrives exactly once through its own.
+    """
+    store.write(
+        key="memory/note/komper", value="the deploy checklist covers index usage",
+        origin="agent_inferred", agent_id="agentgate", session_id="s-1",
+        repository_id=REPO, task_type=TASK,
+    )
+    resolved = resolve_managed_guidance(
+        selections=parse_selections(f"{REPO}:{TASK}:{GUIDANCE_KEY}"),
+        scope=ResolvedScope(REPO, TASK, "agentgate"),
+        select_unique=store.select_unique,
+    )
+    assert resolved is not None
+
+    client = _client(scripted)
+    # Both paths active on the same turn.
+    _send(client, "deploy checklist", ephemeral=resolved.text)
+
+    sent = scripted.text_sent()
+    assert sent.count(INSTRUCTION) == 1, "managed guidance did not arrive exactly once"
+
+
+def test_recalled_memory_is_stripped_of_the_managed_record(store):
+    """A managed record recovered by generic recall is removed before injection.
+
+    The record is a normal governed record, so `retrieve()` can return it. The
+    guarantee is not that it is unretrievable — it is that it does not *reach the
+    model* by that second path. The runner strips it from recalled memory before
+    assembling the turn.
+    """
+    from core.context.managed_guidance import strip_guidance_lines
+
+    hits = store.retrieve("Verify upgrade database previous release",
+                          agent_id="agentgate", limit=20)
+    recalled = [r for r in hits.records if r.key == GUIDANCE_KEY]
+    assert recalled, "expected generic recall to surface the managed record"
+
+    # Recall renders records as "- key: value"; the runner removes those lines.
+    rendered = f"- {GUIDANCE_KEY}: {INSTRUCTION}"
+    assert strip_guidance_lines([rendered], GUIDANCE_KEY) == []
+
+
+def test_stripping_keeps_other_recalled_records(store):
+    from core.context.managed_guidance import strip_guidance_lines
+
+    block = (
+        "- memory/note/komper: the deploy checklist covers index usage\n"
+        f"- {GUIDANCE_KEY}: {INSTRUCTION}"
+    )
+    kept = strip_guidance_lines([block], GUIDANCE_KEY)
+    assert len(kept) == 1
+    assert "deploy checklist" in kept[0]
+    assert GUIDANCE_KEY not in kept[0]
+
+
+def test_an_older_agentdb_omits_guidance_rather_than_guessing(monkeypatch):
+    """Without select_unique, the feature is omitted — not degraded to read()."""
+    import runners.deepinfra as di
+
+    runner = di.DeepInfraRunner.__new__(di.DeepInfraRunner)
+    runner._agentdb = object()          # an 0.8.0 store: no select_unique
+
+    import core.config as config
+
+    monkeypatch.setattr(
+        config, "managed_guidance_selections",
+        lambda: (parse_selections(f"{REPO}:{TASK}:{GUIDANCE_KEY}"), []),
+    )
+    assert runner._managed_guidance_text("t1", "/ws", "/tmp") == ""
